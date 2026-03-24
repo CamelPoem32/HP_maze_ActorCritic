@@ -21,9 +21,9 @@ class HarryPotterEnv(gym.Env):
         self.catch_radius = 0.4
         self.goal_radius = 0.5
         self.time_penalty = -0.1
-        self.lose_reward = -1e3
-        self.win_reward = 1e3
-        self.distance_scaler = 1e-2
+        self.lose_reward = -1e2
+        self.win_reward = 1e2
+        self.distance_scaler = 5e-2
         
         # Walls defining the "loop" (AABB: [x_min, x_max, y_min, y_max])
         self.walls = [
