@@ -22,7 +22,7 @@ def train_a2c_separate(env, actor, critic, args, device):
     # --- CHECKPOINT LOADING ---
     if args.load_path and os.path.isfile(args.load_path):
         print(f"Loading checkpoint from {args.load_path}...")
-        checkpoint = torch.load(args.load_path, map_location=device)
+        checkpoint = torch.load(args.load_path, map_location=device, weights_only=False)
         
         actor.load_state_dict(checkpoint['actor_state_dict'])
         critic.load_state_dict(checkpoint['critic_state_dict'])
@@ -38,6 +38,8 @@ def train_a2c_separate(env, actor, critic, args, device):
     elif args.load_path:
         print(f"Warning: {args.load_path} not found. Starting fresh.")
 
+    wins = 0
+    t0 = time.time()
     for ep in range(start_episode, start_episode + args.episodes):
         start_time = time.time()
         obs, _ = env.reset()
@@ -95,12 +97,16 @@ def train_a2c_separate(env, actor, critic, args, device):
         rewards_history.append(ep_reward)
         actor_loss_history.append(total_actor_loss.item())
         critic_loss_history.append(total_critic_loss.item())
+
+        if info.get('result') == "escaped": wins += 1
         
         if ep % args.log_interval == 0:
-            print(f"Separate A2C | Ep: {ep} | Reward: {ep_reward:.2f} | Time: {ep_time:.3f}s | Result: {info.get('result', 'N/A')}")
+            print(f"Separate A2C | Ep: {ep} | Reward: {ep_reward:.2f} | Winrate {wins/args.log_interval:.2f} | Time: {ep_time:.3f}s | Result: {info.get('result', 'N/A')}")
+            t0 = time.time()
+            wins = 0
 
         # Periodic save
-        if ep % 100 == 0 and ep > 0:
+        if ep % 1000 == 0 and ep > 0:
             torch.save({
                 'actor_state_dict': actor.state_dict(),
                 'critic_state_dict': critic.state_dict(),
@@ -132,7 +138,7 @@ if __name__ == '__main__':
     parser.add_argument('--episodes', type=int, default=1000)
     parser.add_argument('--lr', type=float, default=3e-4)
     parser.add_argument('--gamma', type=float, default=0.99)
-    parser.add_argument('--log_interval', type=int, default=50)
+    parser.add_argument('--log_interval', type=int, default=100)
     parser.add_argument('--save_path', type=str, default='a2c_separate/a2c_separate.pt')
     parser.add_argument('--load_path', type=str, default=None)
     parser.add_argument('--device', type=str, default='cpu')

@@ -20,7 +20,7 @@ def train_ppo(env, model, args, device):
     # --- CHECKPOINT LOADING ---
     if args.load_path and os.path.isfile(args.load_path):
         print(f"Loading checkpoint from {args.load_path}...")
-        checkpoint = torch.load(args.load_path, map_location=device)
+        checkpoint = torch.load(args.load_path, map_location=device, weights_only=False)
         
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
@@ -36,6 +36,8 @@ def train_ppo(env, model, args, device):
         print(f"Warning: Checkpoint file {args.load_path} not found. Starting from scratch.")
 
     # Adjust loop to handle start_episode
+    wins = 0
+    t0 = time.time()
     for ep in range(start_episode, start_episode + args.episodes):
         start_time = time.time()
         obs, _ = env.reset()
@@ -99,12 +101,16 @@ def train_ppo(env, model, args, device):
         rewards_hist.append(ep_reward)
         actor_loss_hist.append(ep_actor_loss / args.k_epochs)
         critic_loss_hist.append(ep_critic_loss / args.k_epochs)
+
+        if info.get('result') == "escaped": wins += 1
             
         if ep % args.log_interval == 0:
-            print(f"PPO | Ep: {ep} | Reward: {ep_reward:.2f} | Time: {ep_time:.3f}s | Result: {info.get('result', 'N/A')}")
+            print(f"PPO | Ep: {ep} | Reward: {ep_reward:.2f} | Winrate {wins/args.log_interval:.2f} | Time: {(time.time() - t0)/args.log_interval:.3f}s | Result: {info.get('result', 'N/A')}")
+            t0 = time.time()
+            wins = 0
 
         # Intermediate save every 100 episodes
-        if ep % 100 == 0 and ep > 0:
+        if ep % 1000 == 0 and ep > 0:
             temp_checkpoint = {
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
@@ -136,7 +142,7 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--eps_clip', type=float, default=0.2)
     parser.add_argument('--k_epochs', type=int, default=4)
-    parser.add_argument('--log_interval', type=int, default=50)
+    parser.add_argument('--log_interval', type=int, default=100)
     parser.add_argument('--save_path', type=str, default='ppo/ppo_ckpt.pt')
     parser.add_argument('--load_path', type=str, default=None, help="Path to load a checkpoint from")
     parser.add_argument('--device', type=str, default='cpu')

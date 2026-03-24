@@ -36,8 +36,14 @@ class HarryPotterEnv(gym.Env):
         self.steps = 0
         
         # Initial positions
-        self.harry_pos = np.array([1.0, 1.0])
-        self.goal_pos = np.array([9.0, 9.0])
+        self.harry_pos_min = np.array([1.0, 1.0])
+        self.harry_pos_max = np.array([1.0, 9.0])
+        self.harry_pos = np.array([np.random.uniform(self.harry_pos_min[0], self.harry_pos_max[0]), 
+                                   np.random.uniform(self.harry_pos_min[1], self.harry_pos_max[1])])
+        self.goal_pos_min = np.array([9.0, 1.0])
+        self.goal_pos_max = np.array([9.0, 9.0])
+        self.goal_pos = np.array([np.random.uniform(self.goal_pos_min[0], self.goal_pos_max[0]), 
+                                   np.random.uniform(self.goal_pos_min[1], self.goal_pos_max[1])])
         
         self.filch_pos = np.array([5.0, 5.0])
         self.filch_target = self._get_random_waypoint()
