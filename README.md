@@ -7,6 +7,8 @@ The environment is a continuous 2D field. The agent must reach a randomly spawne
 
 ![Preview](Preview.png)
 
+![Gif](HP_a2c.gif)
+
 ---
 
 ## Markov Decision Process (MDP) Formulation
