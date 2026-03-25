@@ -3,6 +3,7 @@ import torch
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+import gc
 
 def smooth_curve(data, window_size=50):
     """Applies a moving average to smooth out noisy RL data."""
@@ -33,10 +34,11 @@ def plot_training_results(checkpoints_data):
         
         # 1. Plot Rewards
         # Plot faint raw data in the background, bold smoothed data on top
-        axs[0, 0].plot(episodes, rewards, alpha=0.2)
-        if len(rewards) >= 50:
-            smoothed_rewards = smooth_curve(rewards, window_size=50)
-            axs[0, 0].plot(np.arange(49, len(rewards)), smoothed_rewards, label=f"{method} (Smoothed)", linewidth=2)
+        # axs[0, 0].plot(episodes, rewards, alpha=0.2)
+        smoothing_window = 200
+        if len(rewards) >= smoothing_window:
+            smoothed_rewards = smooth_curve(rewards, window_size=smoothing_window)
+            axs[0, 0].plot(np.arange(smoothing_window-1, len(rewards)), smoothed_rewards, label=f"{method} (Smoothed)", linewidth=2)
         else:
             axs[0, 0].plot(episodes, rewards, label=method, linewidth=2)
 
@@ -45,16 +47,16 @@ def plot_training_results(checkpoints_data):
             axs[0, 1].plot(winrate_epochs, np.array(winrates)*100, marker='o', linestyle='-', label=method, linewidth=2)
 
         # 3. Plot Actor Losses
-        if len(actor_losses) >= 50:
-            smoothed_al = smooth_curve(actor_losses, window_size=50)
-            axs[1, 0].plot(np.arange(49, len(actor_losses)), smoothed_al, label=method, linewidth=2)
+        if len(actor_losses) >= smoothing_window:
+            smoothed_al = smooth_curve(actor_losses, window_size=smoothing_window)
+            axs[1, 0].plot(np.arange(smoothing_window-1, len(actor_losses)), smoothed_al, label=method, linewidth=2)
         else:
             axs[1, 0].plot(np.arange(len(actor_losses)), actor_losses, alpha=0.8, label=method)
 
         # 4. Plot Critic Losses
-        if len(critic_losses) >= 50:
-            smoothed_cl = smooth_curve(critic_losses, window_size=50)
-            axs[1, 1].plot(np.arange(49, len(critic_losses)), smoothed_cl, label=method, linewidth=2)
+        if len(critic_losses) >= smoothing_window:
+            smoothed_cl = smooth_curve(critic_losses, window_size=smoothing_window)
+            axs[1, 1].plot(np.arange(smoothing_window-1, len(critic_losses)), smoothed_cl, label=method, linewidth=2)
         else:
             axs[1, 1].plot(np.arange(len(critic_losses)), critic_losses, alpha=0.8, label=method)
 
@@ -120,4 +122,5 @@ def main():
 if __name__ == '__main__':
     # python visualize.py --files ppo_ckpt.pt --methods "PPO"
     # python visualize.py --files ppo_ckpt.pt a2c_shared_ckpt.pth a2c_separate_ckpt.pth --methods "PPO" "Shared A2C" "Separate A2C"
+    gc.collect()
     main()

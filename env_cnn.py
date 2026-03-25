@@ -9,11 +9,16 @@ class HarryPotterEnv(gym.Env):
         # Action: [dx, dy] continuous movement
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
         
-        # Obs: [harry_x, harry_y, filch_x, filch_y, filch_timer, cat_x, cat_y, cat_timer, goal_x, goal_y]
-        field_size = 10.0
-        self.observation_space = spaces.Box(low=0.0, high=field_size, shape=(10,), dtype=np.float32)
+        # Grid parameters for the artificial map
+        self.grid_size = 64
+        self.field_size = 10.0
         
-        # Maze parameters
+        # Obs: 4 Channels (Walls, Harry, Goal, Enemies Memory), 64x64 Grid
+        self.observation_space = spaces.Box(low=0.0, high=1.0, 
+                                            shape=(4, self.grid_size, self.grid_size), 
+                                            dtype=np.float32)
+        
+        # Maze parameters (Same as before)
         self.max_steps = 500
         self.agent_speed = 0.4
         self.enemy_speed = 0.25
@@ -24,13 +29,12 @@ class HarryPotterEnv(gym.Env):
         self.time_penalty = 1e-2
         self.lose_reward = -1e3
         self.win_reward = 1e4
-        self.distance_scaler = 3e1 / (field_size**2)
-        self.distance_scaler_enemy = self.distance_scaler / ((field_size/self.smell_radius+1)**2)
+        self.distance_scaler = 3e1 / (self.field_size**2)
+        self.distance_scaler_enemy = self.distance_scaler / ((self.field_size/self.smell_radius+1)**2)
         
-        # Walls defining the "loop" (AABB: [x_min, x_max, y_min, y_max])
         self.walls = [
             [4.0, 6.0, 0.0, 4.0],  # Bottom wall
-            [4.0, 6.0, 6.0, 10.0]  # Top wall (leaves middle and sides open)
+            [4.0, 6.0, 6.0, 10.0]  # Top wall
         ]
 
     def reset(self, seed=None):
@@ -219,45 +223,15 @@ class HarryPotterEnv(gym.Env):
         
         return np.linalg.norm(P - projection), projection
 
-    def get_walls_distance(self):
-        walls_distances = []
-        points_closest_x = []
-        points_closest_y = []
-        P = self.harry_pos
-        
-        for wall in self.walls:
-            x_min, x_max, y_min, y_max = wall
-            
-            # Define the 4 corners
-            bl = np.array([x_min, y_min]) # bottom-left
-            br = np.array([x_max, y_min]) # bottom-right
-            tl = np.array([x_min, y_max]) # top-left
-            tr = np.array([x_max, y_max]) # top-right
-            
-            # Calculate distance to each of the 4 edges
-            d_bottom, p_bottom = self._dist_to_segment(P, bl, br)
-            d_right, p_right  = self._dist_to_segment(P, br, tr)
-            d_top, p_top    = self._dist_to_segment(P, tr, tl)
-            d_left, p_left   = self._dist_to_segment(P, tl, bl)
-            
-            # The distance to this wall is the minimum distance to its boundary
-            distances = np.array([d_bottom, d_right, d_top, d_left])
-            points_x = np.array([p_bottom[0], p_right[0], p_top[0], p_left[0]])
-            points_y = np.array([p_bottom[1], p_right[1], p_top[1], p_left[1]])
-            min_dist_i = np.argmin(distances)
-            min_dist = distances[min_dist_i]
-            walls_distances.append(np.float32(min_dist))
-            points_closest_x.append(np.float32(points_x[min_dist_i]))
-            points_closest_y.append(np.float32(points_y[min_dist_i]))
-
-        walls_distances = np.array(walls_distances, dtype=np.float32)
-        points_closest_x = np.array(points_closest_x, dtype=np.float32)
-        points_closest_y = np.array(points_closest_y, dtype=np.float32)
-            
-        return walls_distances, points_closest_x, points_closest_y
+    def _pos_to_pixel(self, pos):
+        """Converts continuous coordinates (0-10) to grid indices (0-63)."""
+        # Clamp to ensure we stay within the grid
+        px = int(np.clip((pos[0] / self.field_size) * self.grid_size, 0, self.grid_size - 1))
+        py = int(np.clip((pos[1] / self.field_size) * self.grid_size, 0, self.grid_size - 1))
+        return px, py
 
     def _get_obs(self):
-        # Update visibility / memory
+        # 1. Update visibility / memory (same logic as before)
         if np.linalg.norm(self.harry_pos - self.filch_pos) < self.sight_radius and self._has_line_of_sight(self.filch_pos, self.harry_pos):
             self.last_seen_filch = np.copy(self.filch_pos)
             self.filch_timer = 0.0
@@ -269,17 +243,34 @@ class HarryPotterEnv(gym.Env):
             self.cat_timer = 0.0
         else:
             self.cat_timer = min(10.0, self.cat_timer + 0.1)
-        
-        walls_distances, points_closest_x, points_closest_y = self.get_walls_distance()
-        # print(points_closest_x, points_closest_y)
 
-        obs = np.concatenate([
-            self.harry_pos, 
-            self.last_seen_filch, [self.filch_timer],
-            self.last_seen_cat, [self.cat_timer],
-            self.goal_pos,
-            walls_distances,
-            points_closest_x,
-            points_closest_y,
-        ])
-        return obs
+        # 2. Build the Artificial Map (4 Channels, 64x64)
+        obs_map = np.zeros((4, self.grid_size, self.grid_size), dtype=np.float32)
+
+        # Channel 0: Walls
+        for w in self.walls:
+            min_x, min_y = self._pos_to_pixel([w[0], w[2]])
+            max_x, max_y = self._pos_to_pixel([w[1], w[3]])
+            # Fill the wall area with 1.0
+            obs_map[0, min_x:max_x+1, min_y:max_y+1] = 1.0
+
+        # Channel 1: Harry
+        hx, hy = self._pos_to_pixel(self.harry_pos)
+        obs_map[1, hx, hy] = 1.0
+
+        # Channel 2: Goal
+        gx, gy = self._pos_to_pixel(self.goal_pos)
+        obs_map[2, gx, gy] = 1.0
+
+        # Channel 3: Enemies Memory
+        # Intensity fades from 1.0 (just seen) down to 0.0 (seen 10+ seconds ago)
+        filch_intensity = max(0.0, 1.0 - (self.filch_timer / 10.0))
+        cat_intensity = max(0.0, 1.0 - (self.cat_timer / 10.0))
+        
+        fx, fy = self._pos_to_pixel(self.last_seen_filch)
+        cx, cy = self._pos_to_pixel(self.last_seen_cat)
+        
+        obs_map[3, fx, fy] = max(obs_map[3, fx, fy], filch_intensity)
+        obs_map[3, cx, cy] = max(obs_map[3, cx, cy], cat_intensity)
+
+        return obs_map
