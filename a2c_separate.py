@@ -157,7 +157,9 @@ if __name__ == '__main__':
     print(f"Using device: {device}")
 
     env = HarryPotterEnv()
-    obs_dim = env.observation_space.shape[0]
+    env.reset()
+    obs_dim = len(env._get_obs())
+    # obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
     
     actor = ActorNet(obs_dim, act_dim).to(device)

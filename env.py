@@ -24,7 +24,8 @@ class HarryPotterEnv(gym.Env):
         self.time_penalty = 1e-2
         self.lose_reward = -1e3
         self.win_reward = 1e4
-        self.distance_scaler = 1e1 / (field_size**2)
+        self.distance_scaler = 3e1 / (field_size**2)
+        self.distance_scaler_enemy = self.distance_scaler / ((field_size/self.smell_radius+1)**2)
         
         # Walls defining the "loop" (AABB: [x_min, x_max, y_min, y_max])
         self.walls = [
@@ -85,21 +86,42 @@ class HarryPotterEnv(gym.Env):
             return new_pos, False
         return pos, True # Hit wall, pick new target
     
-    def _ccw(self, A, B, C):
-        """Helper to determine if three points are listed in a counter-clockwise order."""
-        return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
+    def _cross_2d(self, v, w):
+        """Calculates the 2D cross product of two vectors."""
+        return v[0] * w[1] - v[1] * w[0]
 
     def _segments_intersect(self, A, B, C, D):
-        """Returns True if line segment AB intersects line segment CD."""
-        return self._ccw(A, C, D) != self._ccw(B, C, D) and self._ccw(A, B, C) != self._ccw(A, B, D)
+        """
+        Checks if segment AB (the path) intersects segment CD (the wall).
+        Uses vector projection and interval checking.
+        """
+        p = A              # Path start
+        r = B - A          # Path vector
+        q = C              # Wall start
+        s = D - C          # Wall vector
 
-    def _has_line_of_sight(self, pos1, pos2):
-        """Checks if there is a clear path between pos1 and pos2 without walls."""
-        A = pos1
-        B = pos2
+        # Cross product of the two direction vectors
+        r_cross_s = self._cross_2d(r, s)
         
+        q_minus_p = q - p
+        
+        # If r_cross_s is 0, the lines are perfectly parallel (no intersection)
+        if abs(r_cross_s) < 1e-8:
+            return False
+
+        # 't' is the scalar projection along the path vector (AB)
+        t = self._cross_2d(q_minus_p, s) / r_cross_s
+        
+        # 'u' is the scalar projection along the wall vector (CD)
+        u = self._cross_2d(q_minus_p, r) / r_cross_s
+
+        # The lines cross ONLY IF the projection point falls exactly 
+        # inside both vector intervals [0, 1]
+        return (0 <= t <= 1) and (0 <= u <= 1)
+
+    def _has_line_of_sight(self, start_pos, target_pos):
+        """Checks if the path between start and target collides with any walls."""
         for w in self.walls:
-            # Wall coordinates: [x_min, x_max, y_min, y_max]
             x_min, x_max, y_min, y_max = w
             
             # The 4 corners of the wall
@@ -109,18 +131,20 @@ class HarryPotterEnv(gym.Env):
             top_right = np.array([x_max, y_max])
             
             # Check intersection with all 4 bounding segments of the wall
-            if (self._segments_intersect(A, B, bottom_left, bottom_right) or
-                self._segments_intersect(A, B, bottom_right, top_right) or
-                self._segments_intersect(A, B, top_right, top_left) or
-                self._segments_intersect(A, B, top_left, bottom_left)):
-                return False # Wall is blocking the view
+            if (self._segments_intersect(start_pos, target_pos, bottom_left, bottom_right) or
+                self._segments_intersect(start_pos, target_pos, bottom_right, top_right) or
+                self._segments_intersect(start_pos, target_pos, top_right, top_left) or
+                self._segments_intersect(start_pos, target_pos, top_left, bottom_left)):
+                return False # Path hits a wall
                 
-        return True # Clear line of sight
+        return True # Path is clear
 
     def step(self, action):
         self.steps += 1
         reward = -self.time_penalty # Time penalty
         reward += -np.float32(np.linalg.norm((self.goal_pos - self.harry_pos)**2)*self.distance_scaler) # Distance to goal penalty
+        reward += np.float32(np.linalg.norm((self.last_seen_filch - self.harry_pos)**2)*self.distance_scaler_enemy) # Distance to Filch penalty
+        reward += np.float32(np.linalg.norm((self.last_seen_cat - self.harry_pos)**2)*self.distance_scaler_enemy) # Distance to mrs. Norris penalty
         done = False
         info = {}
 
@@ -168,13 +192,13 @@ class HarryPotterEnv(gym.Env):
 
     def _get_obs(self):
         # Update visibility / memory
-        if np.linalg.norm(self.harry_pos - self.filch_pos) < self.sight_radius:
+        if np.linalg.norm(self.harry_pos - self.filch_pos) < self.sight_radius and self._has_line_of_sight(self.filch_pos, self.harry_pos):
             self.last_seen_filch = np.copy(self.filch_pos)
             self.filch_timer = 0.0
         else:
             self.filch_timer = min(10.0, self.filch_timer + 0.1)
 
-        if np.linalg.norm(self.harry_pos - self.cat_pos) < self.sight_radius:
+        if np.linalg.norm(self.harry_pos - self.cat_pos) < self.sight_radius and self._has_line_of_sight(self.cat_pos, self.harry_pos):
             self.last_seen_cat = np.copy(self.cat_pos)
             self.cat_timer = 0.0
         else:
@@ -184,6 +208,7 @@ class HarryPotterEnv(gym.Env):
             self.harry_pos, 
             self.last_seen_filch, [self.filch_timer],
             self.last_seen_cat, [self.cat_timer],
-            self.goal_pos
+            self.goal_pos,
+            np.array(self.walls).flatten(),
         ])
         return obs

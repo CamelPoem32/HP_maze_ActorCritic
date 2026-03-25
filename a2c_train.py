@@ -141,5 +141,7 @@ if __name__ == '__main__':
     print(f"Using device: {device}")
 
     env = HarryPotterEnv()
-    model = ActorCriticNet(10, 2).to(device)
+    env.reset()
+    obs_dim = len(env._get_obs())
+    model = ActorCriticNet(obs_dim, 2).to(device)
     train_a2c(env, model, args, device)

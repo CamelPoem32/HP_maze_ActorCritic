@@ -161,7 +161,9 @@ if __name__ == '__main__':
     print(f"Using device: {device}")
 
     env = HarryPotterEnv()
+    env.reset()
+    obs_dim = len(env._get_obs())
     # Observation space is 10, Action space is 2
-    model = ActorCriticNet(10, 2).to(device)
+    model = ActorCriticNet(obs_dim, 2).to(device)
     
     train_ppo(env, model, args, device)

@@ -21,7 +21,9 @@ def main():
     print(f"Using device: {device}")
 
     env = HarryPotterEnv()
-    obs_dim = env.observation_space.shape[0]
+    env.reset()
+    obs_dim = len(env._get_obs())
+    # obs_dim = env.observation_space.shape[0]
     act_dim = env.action_space.shape[0]
 
     print(f"Loading checkpoint from {args.checkpoint}...")
