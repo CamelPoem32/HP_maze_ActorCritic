@@ -10,7 +10,8 @@ class HarryPotterEnv(gym.Env):
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
         
         # Obs: [harry_x, harry_y, filch_x, filch_y, filch_timer, cat_x, cat_y, cat_timer, goal_x, goal_y]
-        self.observation_space = spaces.Box(low=0.0, high=10.0, shape=(10,), dtype=np.float32)
+        field_size = 10.0
+        self.observation_space = spaces.Box(low=0.0, high=field_size, shape=(10,), dtype=np.float32)
         
         # Maze parameters
         self.max_steps = 500
@@ -21,9 +22,9 @@ class HarryPotterEnv(gym.Env):
         self.catch_radius = 0.4
         self.goal_radius = 0.5
         self.time_penalty = -0.1
-        self.lose_reward = -1e2
-        self.win_reward = 1e2
-        self.distance_scaler = 5e-2
+        self.lose_reward = -1e4
+        self.win_reward = 1e4
+        self.distance_scaler = 1e1 / (field_size**2)
         
         # Walls defining the "loop" (AABB: [x_min, x_max, y_min, y_max])
         self.walls = [
@@ -83,11 +84,43 @@ class HarryPotterEnv(gym.Env):
         if not self._is_in_wall(new_pos):
             return new_pos, False
         return pos, True # Hit wall, pick new target
+    
+    def _ccw(self, A, B, C):
+        """Helper to determine if three points are listed in a counter-clockwise order."""
+        return (C[1] - A[1]) * (B[0] - A[0]) > (B[1] - A[1]) * (C[0] - A[0])
+
+    def _segments_intersect(self, A, B, C, D):
+        """Returns True if line segment AB intersects line segment CD."""
+        return self._ccw(A, C, D) != self._ccw(B, C, D) and self._ccw(A, B, C) != self._ccw(A, B, D)
+
+    def _has_line_of_sight(self, pos1, pos2):
+        """Checks if there is a clear path between pos1 and pos2 without walls."""
+        A = pos1
+        B = pos2
+        
+        for w in self.walls:
+            # Wall coordinates: [x_min, x_max, y_min, y_max]
+            x_min, x_max, y_min, y_max = w
+            
+            # The 4 corners of the wall
+            bottom_left = np.array([x_min, y_min])
+            bottom_right = np.array([x_max, y_min])
+            top_left = np.array([x_min, y_max])
+            top_right = np.array([x_max, y_max])
+            
+            # Check intersection with all 4 bounding segments of the wall
+            if (self._segments_intersect(A, B, bottom_left, bottom_right) or
+                self._segments_intersect(A, B, bottom_right, top_right) or
+                self._segments_intersect(A, B, top_right, top_left) or
+                self._segments_intersect(A, B, top_left, bottom_left)):
+                return False # Wall is blocking the view
+                
+        return True # Clear line of sight
 
     def step(self, action):
         self.steps += 1
-        # reward = self.time_penalty # Time penalty
-        reward = -np.float32(np.linalg.norm((self.goal_pos - self.harry_pos)**2)*self.distance_scaler) # Distance to goal penalty
+        reward = self.time_penalty # Time penalty
+        reward += -np.float32(np.linalg.norm((self.goal_pos - self.harry_pos)**2)*self.distance_scaler) # Distance to goal penalty
         done = False
         info = {}
 
@@ -105,7 +138,7 @@ class HarryPotterEnv(gym.Env):
 
         # Mrs. Norris logic: smell tracking
         dist_to_cat = np.linalg.norm(self.harry_pos - self.cat_pos)
-        if dist_to_cat < self.smell_radius:
+        if dist_to_cat < self.smell_radius and self._has_line_of_sight(self.cat_pos, self.harry_pos):
             self.cat_target = np.copy(self.harry_pos) # Overwrite target to pursue Harry
         
         self.cat_pos, reached_c = self._move_entity(self.cat_pos, self.cat_target, self.enemy_speed * 1.1)
@@ -127,6 +160,7 @@ class HarryPotterEnv(gym.Env):
 
         # 5. Check Timeout
         elif self.steps >= self.max_steps:
+            reward = self.lose_reward
             done = True
             info['result'] = 'timeout'
 

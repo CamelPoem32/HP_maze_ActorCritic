@@ -12,15 +12,11 @@ class ActorCriticNet(nn.Module):
         # Shared feature extractor
         self.shared = nn.Sequential(
             nn.Linear(obs_dim, self.hidden_dim),
-            nn.LeakyReLU(),
+            nn.Tanh(), # Tanh is often more stable than LeakyReLU in continuous PPO
             nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.LeakyReLU(),
+            nn.Tanh(),
             nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.LeakyReLU(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.LeakyReLU(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.LeakyReLU(),
+            nn.Tanh()
         )
         
         # Actor head (Mean and log standard deviation for continuous actions)
