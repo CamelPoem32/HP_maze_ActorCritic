@@ -30,11 +30,14 @@ def visualize_episode(env, model):
         
         # Smell radius representation
         cat_smell = patches.Circle((env.cat_pos[0], env.cat_pos[1]), env.smell_radius, color='red', alpha=0.1)
+        # Sight radius representation
+        harry_sight = patches.Circle((env.harry_pos[0], env.harry_pos[1]), env.sight_radius, color='blue', alpha=0.1)
         
         ax.add_patch(harry)
         ax.add_patch(filch)
         ax.add_patch(cat)
         ax.add_patch(cat_smell)
+        ax.add_patch(harry_sight)
         
         ax.legend(loc='upper right')
         plt.pause(0.05)

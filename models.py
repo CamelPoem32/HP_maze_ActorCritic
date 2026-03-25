@@ -52,15 +52,11 @@ class ActorNet(nn.Module):
 
         self.net = nn.Sequential(
             nn.Linear(obs_dim, self.hidden_dim),
-            nn.LeakyReLU(),
+            nn.Tanh(), # Tanh is often more stable than LeakyReLU in continuous PPO
             nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.LeakyReLU(),
+            nn.Tanh(),
             nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.LeakyReLU(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.LeakyReLU(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.LeakyReLU(),
+            nn.Tanh()
         )
 
         self.mean = nn.Linear(self.hidden_dim, act_dim)
@@ -81,15 +77,11 @@ class CriticNet(nn.Module):
 
         self.net = nn.Sequential(
             nn.Linear(obs_dim, self.hidden_dim),
-            nn.LeakyReLU(),
+            nn.Tanh(), # Tanh is often more stable than LeakyReLU in continuous PPO
             nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.LeakyReLU(),
+            nn.Tanh(),
             nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.LeakyReLU(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.LeakyReLU(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.LeakyReLU(),
+            nn.Tanh()
         )
         self.value = nn.Linear(self.hidden_dim, 1)
 

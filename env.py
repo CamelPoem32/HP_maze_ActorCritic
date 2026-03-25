@@ -18,11 +18,11 @@ class HarryPotterEnv(gym.Env):
         self.agent_speed = 0.4
         self.enemy_speed = 0.25
         self.smell_radius = 2.5
-        self.sight_radius = 3.5
+        self.sight_radius = 5.0
         self.catch_radius = 0.4
         self.goal_radius = 0.5
-        self.time_penalty = -0.1
-        self.lose_reward = -1e4
+        self.time_penalty = 1e-2
+        self.lose_reward = -1e3
         self.win_reward = 1e4
         self.distance_scaler = 1e1 / (field_size**2)
         
@@ -119,7 +119,7 @@ class HarryPotterEnv(gym.Env):
 
     def step(self, action):
         self.steps += 1
-        reward = self.time_penalty # Time penalty
+        reward = -self.time_penalty # Time penalty
         reward += -np.float32(np.linalg.norm((self.goal_pos - self.harry_pos)**2)*self.distance_scaler) # Distance to goal penalty
         done = False
         info = {}
