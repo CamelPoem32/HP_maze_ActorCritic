@@ -42,7 +42,7 @@ def plot_training_results(checkpoints_data):
 
         # 2. Plot Winrates (using specific epochs as X-axis)
         if len(winrates) > 0 and len(winrate_epochs) > 0:
-            axs[0, 1].plot(winrate_epochs, winrates, marker='o', linestyle='-', label=method, linewidth=2)
+            axs[0, 1].plot(winrate_epochs, np.array(winrates)*100, marker='o', linestyle='-', label=method, linewidth=2)
 
         # 3. Plot Actor Losses
         if len(actor_losses) >= 50:
