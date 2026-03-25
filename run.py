@@ -5,9 +5,6 @@ from env import HarryPotterEnv
 from models import ActorCriticNet
 from a2c_separate import ActorNet
 
-# Assuming visualize_episode is imported from your visualize.py module
-from visualize import visualize_episode 
-
 def main():
     parser = argparse.ArgumentParser(description="Visualize Trained Harry Potter RL Agents")
     parser.add_argument('--method', type=str, required=True, 
