@@ -69,11 +69,11 @@ class HarryPotterEnv(gym.Env):
 
     def _is_in_wall(self, pos):
         if pos[0] < 0 or pos[0] > 10 or pos[1] < 0 or pos[1] > 10:
-            return True
+            return 2
         for w in self.walls:
             if w[0] < pos[0] < w[1] and w[2] < pos[1] < w[3]:
-                return True
-        return False
+                return 1
+        return 0
 
     def _move_entity(self, pos, target, speed):
         direction = target - pos
@@ -153,6 +153,12 @@ class HarryPotterEnv(gym.Env):
         new_harry = self.harry_pos + action * self.agent_speed
         if not self._is_in_wall(new_harry):
             self.harry_pos = new_harry
+        elif self._is_in_wall(new_harry) == 1:          # In wall, not in game border
+            reward = self.lose_reward
+
+            # print(np.min(self.get_walls_distance()))
+            done = True
+            info['result'] = 'wall'
 
         # 2. Move Enemies
         # Filch logic: random waypoints
@@ -190,6 +196,54 @@ class HarryPotterEnv(gym.Env):
 
         return self._get_obs(), reward, done, False, info
 
+    def _dist_to_segment(self, P, A, B):
+        """Calculates the minimum distance between point P and line segment AB."""
+        # Vector from A to B
+        v = B - A
+        # Vector from A to P
+        w = P - A
+        
+        # Calculate the projection scalar 't' of point P onto the line AB
+        # t = dot(w, v) / |v|^2
+        v_sq = np.dot(v, v)
+        if v_sq < 1e-10: 
+            return np.linalg.norm(P - A) # A and B are the same point
+            
+        t = np.dot(w, v) / v_sq
+        
+        # Clamp t to the interval [0, 1] to stay on the segment
+        t = np.clip(t, 0, 1)
+        
+        # The nearest point on the segment
+        projection = A + t * v
+        
+        return np.linalg.norm(P - projection)
+
+    def get_walls_distance(self):
+        walls_distances = []
+        P = self.harry_pos
+        
+        for wall in self.walls:
+            x_min, x_max, y_min, y_max = wall
+            
+            # Define the 4 corners
+            bl = np.array([x_min, y_min]) # bottom-left
+            br = np.array([x_max, y_min]) # bottom-right
+            tl = np.array([x_min, y_max]) # top-left
+            tr = np.array([x_max, y_max]) # top-right
+            
+            # Calculate distance to each of the 4 edges
+            d_bottom = self._dist_to_segment(P, bl, br)
+            d_right  = self._dist_to_segment(P, br, tr)
+            d_top    = self._dist_to_segment(P, tr, tl)
+            d_left   = self._dist_to_segment(P, tl, bl)
+            
+            # The distance to this wall is the minimum distance to its boundary
+            min_dist = min(d_bottom, d_right, d_top, d_left)
+            walls_distances.append(np.float32(min_dist))
+            
+        return np.array(walls_distances, dtype=np.float32)
+
     def _get_obs(self):
         # Update visibility / memory
         if np.linalg.norm(self.harry_pos - self.filch_pos) < self.sight_radius and self._has_line_of_sight(self.filch_pos, self.harry_pos):
@@ -203,12 +257,13 @@ class HarryPotterEnv(gym.Env):
             self.cat_timer = 0.0
         else:
             self.cat_timer = min(10.0, self.cat_timer + 0.1)
+        # print(self.get_walls_distance())
 
         obs = np.concatenate([
             self.harry_pos, 
             self.last_seen_filch, [self.filch_timer],
             self.last_seen_cat, [self.cat_timer],
             self.goal_pos,
-            np.array(self.walls).flatten(),
+            self.get_walls_distance(),
         ])
         return obs
