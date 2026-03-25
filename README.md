@@ -83,16 +83,15 @@ $$L_{CLIP}(\theta) = \mathbb{E} [\min(r_t(\theta)A_t, \text{clip}(r_t(\theta), 1
 ## Results
 
 ### Training Metrics
-*(Insert plots using visualization.py comparing A2C Shared, A2C Separate, and PPO).*
 
 ![Episode Rewards](a2c_metrics_reward.png)
-*Figure 1: Smoothed episode rewards over time.*
+*Figure 1: Уpisode rewards over time.*
 
 ![Winrate vs Epochs](a2c_metrics_winrate.png)
 *Figure 2: Winrate percentage evaluated at fixed epoch intervals.*
 
 ![Actor and Critic Loss](a2c_metrics_loss.png)
-*Figure 3: Critic Loss and Actor Loss dynamics.*
+*Figure 3: Critic Loss dynamics.*
 
 ### Conclusion
-<!-- PPO generally demonstrated superior sample efficiency and stability over standard A2C. The shift from absolute vector coordinates to either relative geometric distances or spatial CNN maps proved to be the most critical factor in crossing the "wall avoidance" threshold. -->
+Actor-Critic with CNN reached the acceptable performance over limited training time, other architectures didn't provide results better than starting ones. So, further comparison of all architectures can be done.
