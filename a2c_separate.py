@@ -17,6 +17,7 @@ def train_a2c_separate(env, actor, critic, args, device):
     rewards_history = []
     actor_loss_history = []
     critic_loss_history = []
+    winrates, winrate_epochs = [], []
     start_episode = 0
 
     # --- CHECKPOINT LOADING ---
@@ -30,6 +31,8 @@ def train_a2c_separate(env, actor, critic, args, device):
         critic_opt.load_state_dict(checkpoint['critic_opt_state_dict'])
         
         rewards_history = checkpoint.get('rewards', [])
+        winrates = checkpoint.get('winrates', [])
+        winrate_epochs = checkpoint.get('winrate_epochs', [])
         actor_loss_history = checkpoint.get('actor_losses', [])
         critic_loss_history = checkpoint.get('critic_losses', [])
         start_episode = len(rewards_history)
@@ -102,6 +105,8 @@ def train_a2c_separate(env, actor, critic, args, device):
         
         if ep % args.log_interval == 0:
             print(f"Separate A2C | Ep: {ep} | Reward: {ep_reward:.2f} | Winrate {wins/args.log_interval:.2f} | Time: {ep_time:.3f}s | Result: {info.get('result', 'N/A')}")
+            winrates.append(wins/args.log_interval)
+            winrate_epochs.append(ep)
             t0 = time.time()
             wins = 0
 
@@ -113,6 +118,8 @@ def train_a2c_separate(env, actor, critic, args, device):
                 'actor_opt_state_dict': actor_opt.state_dict(),
                 'critic_opt_state_dict': critic_opt.state_dict(),
                 'rewards': rewards_history,
+                'winrates': winrates,
+                'winrate_epochs': winrate_epochs,
                 'actor_losses': actor_loss_history,
                 'critic_losses': critic_loss_history,
             }, args.save_path)
@@ -124,6 +131,8 @@ def train_a2c_separate(env, actor, critic, args, device):
         'actor_opt_state_dict': actor_opt.state_dict(),
         'critic_opt_state_dict': critic_opt.state_dict(),
         'rewards': rewards_history,
+        'winrates': winrates,
+        'winrate_epochs': winrate_epochs,
         'actor_losses': actor_loss_history,
         'critic_losses': critic_loss_history,
         'args': vars(args)

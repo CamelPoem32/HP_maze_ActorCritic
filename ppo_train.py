@@ -15,6 +15,7 @@ def train_ppo(env, model, args, device):
     rewards_hist = []
     actor_loss_hist = []
     critic_loss_hist = []
+    winrates, winrate_epochs = [], []
     start_episode = 0
 
     # --- CHECKPOINT LOADING ---
@@ -27,6 +28,8 @@ def train_ppo(env, model, args, device):
         
         # Load history if it exists
         rewards_hist = checkpoint.get('rewards', [])
+        winrates = checkpoint.get('winrates', [])
+        winrate_epochs = checkpoint.get('winrate_epochs', [])
         actor_loss_hist = checkpoint.get('actor_losses', [])
         critic_loss_hist = checkpoint.get('critic_losses', [])
         start_episode = len(rewards_hist)
@@ -106,6 +109,8 @@ def train_ppo(env, model, args, device):
             
         if ep % args.log_interval == 0:
             print(f"PPO | Ep: {ep} | Reward: {ep_reward:.2f} | Winrate {wins/args.log_interval:.2f} | Time: {(time.time() - t0)/args.log_interval:.3f}s | Result: {info.get('result', 'N/A')}")
+            winrates.append(wins/args.log_interval)
+            winrate_epochs.append(ep)
             t0 = time.time()
             wins = 0
 
@@ -115,6 +120,8 @@ def train_ppo(env, model, args, device):
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'rewards': rewards_hist,
+                'winrates': winrates,
+                'winrate_epochs': winrate_epochs,
                 'actor_losses': actor_loss_hist,
                 'critic_losses': critic_loss_hist,
                 'args': vars(args)
@@ -126,6 +133,8 @@ def train_ppo(env, model, args, device):
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
         'rewards': rewards_hist,
+        'winrates': winrates,
+        'winrate_epochs': winrate_epochs,
         'actor_losses': actor_loss_hist,
         'critic_losses': critic_loss_hist,
         'args': vars(args)
