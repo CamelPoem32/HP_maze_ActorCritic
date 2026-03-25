@@ -85,13 +85,13 @@ $$L_{CLIP}(\theta) = \mathbb{E} [\min(r_t(\theta)A_t, \text{clip}(r_t(\theta), 1
 ### Training Metrics
 *(Insert plots using visualization.py comparing A2C Shared, A2C Separate, and PPO).*
 
-![Episode Rewards](path/to/rewards_plot.png)
+![Episode Rewards](a2c_metrics_reward.png)
 *Figure 1: Smoothed episode rewards over time.*
 
-![Winrate vs Epochs](path/to/winrate_plot.png)
+![Winrate vs Epochs](a2c_metrics_winrate.png)
 *Figure 2: Winrate percentage evaluated at fixed epoch intervals.*
 
-![Actor and Critic Loss](path/to/loss_plots.png)
+![Actor and Critic Loss](a2c_metrics_loss.png)
 *Figure 3: Critic Loss and Actor Loss dynamics.*
 
 ### Conclusion
