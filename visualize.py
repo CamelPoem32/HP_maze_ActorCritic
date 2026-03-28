@@ -31,34 +31,41 @@ def plot_training_results(checkpoints_data):
 
         # X-axes for step=1 metrics
         episodes = np.arange(len(rewards))
+        lw = 1.5
         
         # 1. Plot Rewards
         # Plot faint raw data in the background, bold smoothed data on top
-        # axs[0, 0].plot(episodes, rewards, alpha=0.2)
-        smoothing_window = 200
+        axs[0, 0].plot(episodes, rewards, alpha=0.2)
+        smoothing_window = max(1, len(rewards) // 100)
         if len(rewards) >= smoothing_window:
             smoothed_rewards = smooth_curve(rewards, window_size=smoothing_window)
-            axs[0, 0].plot(np.arange(smoothing_window-1, len(rewards)), smoothed_rewards, label=f"{method} (Smoothed)", linewidth=2)
+            axs[0, 0].plot(np.arange(smoothing_window-1, len(rewards)), smoothed_rewards, label=f"{method} (Smoothed)", linewidth=lw)
         else:
-            axs[0, 0].plot(episodes, rewards, label=method, linewidth=2)
+            axs[0, 0].plot(episodes, rewards, label=method, linewidth=lw)
 
         # 2. Plot Winrates (using specific epochs as X-axis)
-        if len(winrates) > 0 and len(winrate_epochs) > 0:
-            axs[0, 1].plot(winrate_epochs, np.array(winrates)*100, marker='o', linestyle='-', label=method, linewidth=2)
+        axs[0, 1].plot(winrate_epochs, np.array(winrates)*100, alpha=0.2)
+        if len(winrates) > 0 and len(winrate_epochs) > 0 and len(winrates)>=smoothing_window//100:
+            smoothed_winrates = smooth_curve(np.array(winrates)*100, window_size=smoothing_window//100)
+            axs[0, 1].plot(winrate_epochs[smoothing_window//100-1:], smoothed_winrates, linestyle='-', label=f"{method} (Smoothed)", linewidth=lw)
+        else:
+            axs[0, 1].plot(winrate_epochs, np.array(winrates)*100, linestyle='-', label=method, linewidth=lw)
 
         # 3. Plot Actor Losses
+        axs[1, 0].plot(np.arange(len(actor_losses)), actor_losses, alpha=0.2)
         if len(actor_losses) >= smoothing_window:
             smoothed_al = smooth_curve(actor_losses, window_size=smoothing_window)
-            axs[1, 0].plot(np.arange(smoothing_window-1, len(actor_losses)), smoothed_al, label=method, linewidth=2)
+            axs[1, 0].plot(np.arange(smoothing_window-1, len(actor_losses)), smoothed_al, label=f"{method} (Smoothed)", linewidth=lw)
         else:
-            axs[1, 0].plot(np.arange(len(actor_losses)), actor_losses, alpha=0.8, label=method)
+            axs[1, 0].plot(np.arange(len(actor_losses)), actor_losses, alpha=0.8, label=method, linewidth=lw)
 
         # 4. Plot Critic Losses
+        axs[1, 1].plot(np.arange(len(critic_losses)), critic_losses, alpha=0.2)
         if len(critic_losses) >= smoothing_window:
             smoothed_cl = smooth_curve(critic_losses, window_size=smoothing_window)
-            axs[1, 1].plot(np.arange(smoothing_window-1, len(critic_losses)), smoothed_cl, label=method, linewidth=2)
+            axs[1, 1].plot(np.arange(smoothing_window-1, len(critic_losses)), smoothed_cl, label=f"{method} (Smoothed)", linewidth=lw)
         else:
-            axs[1, 1].plot(np.arange(len(critic_losses)), critic_losses, alpha=0.8, label=method)
+            axs[1, 1].plot(np.arange(len(critic_losses)), critic_losses, alpha=0.8, label=method, linewidth=lw)
 
     # Formatting Subplots
     axs[0, 0].set_title('Episode Rewards')
@@ -121,6 +128,6 @@ def main():
 
 if __name__ == '__main__':
     # python visualize.py --files ppo_ckpt.pt --methods "PPO"
-    # python visualize.py --files ppo_ckpt.pt a2c_shared_ckpt.pth a2c_separate_ckpt.pth --methods "PPO" "Shared A2C" "Separate A2C"
+    # python visualize.py --files a2c/a2c_500k_wallpoint_cnn.pt ppo/ppo_200k_wallpoint_cnn.pt a2c_separate/a2c_separate_500k_wallpoint_cnn.pt --methods "a2c" "ppo" "a2c_separated"
     gc.collect()
     main()
