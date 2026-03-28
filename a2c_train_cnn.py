@@ -1,8 +1,11 @@
 import argparse
 import torch
+torch.set_float32_matmul_precision('high')
+
 import torch.optim as optim
 import torch.nn as nn
 import time
+import numpy as np
 import os
 from models_cnn import ActorCriticNet
 from env_cnn import HarryPotterEnv
@@ -42,40 +45,59 @@ def train_a2c(env, model, args, device):
     for ep in range(start_episode, start_episode + args.episodes):
         start_time = time.time()
         obs, _ = env.reset()
+        
+        # Lists to store trajectory data
         log_probs, values, rewards = [], [], []
+        next_obses, masks = [], [] # Need masks to handle terminal states
         done = False
         
+        # 1. Collect Trajectory
         while not done:
-            obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(device)
-            action, log_prob, value = model.get_action(obs_tensor)
+            obs_tensor = torch.FloatTensor(obs).to(device) # Shape: (C, H, W) or (D,)
+            # get_action expects a batch dimension, so we use .unsqueeze(0)
+            action, log_prob, value = model.get_action(obs_tensor.unsqueeze(0))
             
-            # Step the environment
             next_obs, reward, done, _, info = env.step(action.detach().cpu().squeeze().numpy())
             
             log_probs.append(log_prob)
             values.append(value)
             rewards.append(reward)
+            next_obses.append(next_obs)
+            masks.append(1.0 - done) # 0.0 if state is terminal, 1.0 otherwise
+            
             obs = next_obs
-            
-        # Calculate Returns
-        returns = []
-        R = 0
-        for r in reversed(rewards):
-            R = r + args.gamma * R
-            returns.insert(0, R)
-        returns = torch.tensor(returns).to(device)
-        # Standardize returns for stability
-        returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+
+        # 2. Vectorize Data (Convert lists to tensors in one go)
+        # We use .view(-1) to ensure they are 1D arrays
+        log_probs_t = torch.cat(log_probs).view(-1)
+        values_t = torch.cat(values).view(-1)
+        rewards_t = torch.FloatTensor(rewards).to(device)
+        masks_t = torch.FloatTensor(masks).to(device)
         
-        actor_loss, critic_loss = 0, 0
-        for log_prob, value, R in zip(log_probs, values, returns):
-            # Advantage = Return - Value Baseline
-            advantage = R - value.item()
-            actor_loss -= log_prob * advantage
-            target = R.unsqueeze(0).to(device)
-            critic_loss += nn.MSELoss()(value.view(-1), target.view(-1))
-            
+        # Stack all next_obs into one big batch: Shape (Steps, Channels, H, W)
+        next_obs_batch = torch.FloatTensor(np.array(next_obses)).to(device)
+
+        # 3. Get all Next Values in ONE forward pass
+        # We don't need gradients for the "target" side of the equation
+        with torch.no_grad():
+            _, _, next_values_t = model(next_obs_batch)
+            next_values_t = next_values_t.view(-1)
+
+        # 4. Calculate TD-Target and Advantage
+        # Note: if it's the last step (mask=0), target is just the reward
+        td_targets = rewards_t + args.gamma * next_values_t * masks_t
+        advantages = td_targets - values_t
+
+        # 5. Compute Final Losses (Vectorized)
+        # We detach advantages so we don't backprop through the baseline
+        actor_loss = -(log_probs_t * advantages.detach()).mean()
+        
+        # Critic loss: how close was our estimate V(s_t) to the TD-Target?
+        critic_loss = nn.MSELoss()(values_t, td_targets)
+        
         loss = actor_loss + critic_loss
+        
+        # Perform backprop...
         
         optimizer.zero_grad()
         loss.backward()
@@ -91,7 +113,10 @@ def train_a2c(env, model, args, device):
         if info.get('result') == "escaped": wins += 1
         
         if ep % args.log_interval == 0:
-            print(f"Shared A2C | Ep: {ep} | Reward: {ep_reward:.2f} | Winrate {wins/args.log_interval:.2f} | Time: {ep_time:.3f}s | Result: {info.get('result', 'N/A')}")
+            print(f"Shared A2C | Ep: {ep} | Reward: {ep_reward:.2f} | Winrate {wins/args.log_interval:.2f} | Time: {ep_time:.3f}s | ",
+                  f"Critic loss {critic_loss.item():.2f} | Actor loss {actor_loss.item():.2f}"
+                #  "| Result: {info.get('result', 'N/A')}"
+                )
             winrates.append(wins/args.log_interval)
             winrate_epochs.append(ep)
             t0 = time.time()
@@ -126,7 +151,7 @@ def train_a2c(env, model, args, device):
 
 if __name__ == '__main__':
     # Run with
-    # python a2c_train.py --episodes 10000 --save_path a2c/a2c_10k.pt --device cpu
+    # python a2c_train_cnn.py --episodes 20000 --save_path a2c/a2c_20k_cnn.pt --device cuda
     parser = argparse.ArgumentParser()
     parser.add_argument('--episodes', type=int, default=1000)
     parser.add_argument('--lr', type=float, default=3e-4)

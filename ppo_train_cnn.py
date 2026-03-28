@@ -1,5 +1,7 @@
 import argparse
 import torch
+torch.set_float32_matmul_precision('high')
+
 import torch.optim as optim
 import torch.nn as nn
 from torch.distributions import Normal
@@ -15,6 +17,7 @@ def train_ppo(env, model, args, device):
     rewards_hist = []
     actor_loss_hist = []
     critic_loss_hist = []
+    entropy_loss_hist = []
     winrates, winrate_epochs = [], []
     start_episode = 0
 
@@ -32,6 +35,7 @@ def train_ppo(env, model, args, device):
         winrate_epochs = checkpoint.get('winrate_epochs', [])
         actor_loss_hist = checkpoint.get('actor_losses', [])
         critic_loss_hist = checkpoint.get('critic_losses', [])
+        entropy_loss_hist = checkpoint.get('entropy_losses', [])
         start_episode = len(rewards_hist)
         
         print(f"Resuming from episode {start_episode}")
@@ -66,16 +70,17 @@ def train_ppo(env, model, args, device):
         for r in reversed(rewards):
             R = r + args.gamma * R
             returns.insert(0, R)
-        returns = torch.tensor(returns).to(device)
-        returns = (returns - returns.mean()) / (returns.std() + 1e-8)
+        returns = torch.tensor(returns).to(device).float()
+        if returns.std() > 1e-5:
+            returns = (returns - returns.mean()) / (returns.std() + 1e-8)
         
-        old_states = torch.FloatTensor(np.array(states)).to(device)
-        old_actions = torch.cat(actions).to(device)
-        old_log_probs = torch.cat(log_probs).detach().to(device)
-        old_values = torch.cat(values).detach().squeeze().to(device)
+        old_states = torch.FloatTensor(np.array(states)).to(device).float()
+        old_actions = torch.cat(actions).to(device).float()
+        old_log_probs = torch.cat(log_probs).detach().to(device).float()
+        old_values = torch.cat(values).detach().squeeze().to(device).float()
         advantages = (returns - old_values).detach() # Advantage shouldn't propagate gradients back to old values
         
-        ep_actor_loss, ep_critic_loss = 0, 0
+        ep_actor_loss, ep_critic_loss, ep_entropy_loss = 0, 0, 0
         
         for _ in range(args.k_epochs):
             mean, std, current_values = model(old_states)
@@ -88,15 +93,27 @@ def train_ppo(env, model, args, device):
             
             actor_loss = -torch.min(surr1, surr2).mean()
             critic_loss = nn.MSELoss()(current_values.squeeze(), returns)
+            entropy_loss = dist.entropy().sum(dim=-1).mean()
             
-            loss = actor_loss + 0.5 * critic_loss
+            c_critic = torch.tensor(0.5, dtype=torch.float32, device=device)
+            c_entropy = torch.tensor(0.03, dtype=torch.float32, device=device)
+            # Force each component to float32 and ensure they are on the right device
+            actor_loss = actor_loss.to(device=device, dtype=torch.float32)
+            critic_loss = critic_loss.to(device=device, dtype=torch.float32)
+            entropy_loss = entropy_loss.to(device=device, dtype=torch.float32)
+            
+            # print(f"Actor: {actor_loss.dtype}, Critic: {critic_loss.dtype}, Entropy: {entropy_loss.dtype}")
+            loss = actor_loss + c_critic * critic_loss - c_entropy * entropy_loss
+            # print(f"Loss: {loss.dtype}")
             
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.5)
             optimizer.step()
             
             ep_actor_loss += actor_loss.item()
             ep_critic_loss += critic_loss.item()
+            ep_entropy_loss += entropy_loss.item()
             
         ep_time = time.time() - start_time
         ep_reward = sum(rewards)
@@ -104,11 +121,14 @@ def train_ppo(env, model, args, device):
         rewards_hist.append(ep_reward)
         actor_loss_hist.append(ep_actor_loss / args.k_epochs)
         critic_loss_hist.append(ep_critic_loss / args.k_epochs)
+        entropy_loss_hist.append(ep_entropy_loss / args.k_epochs)
 
         if info.get('result') == "escaped": wins += 1
             
         if ep % args.log_interval == 0:
-            print(f"PPO | Ep: {ep} | Reward: {ep_reward:.2f} | Winrate {wins/args.log_interval:.2f} | Time: {(time.time() - t0)/args.log_interval:.3f}s | Result: {info.get('result', 'N/A')}")
+            print(f"PPO | Ep: {ep} | Reward: {ep_reward:.2f} | Winrate {wins/args.log_interval:.2f} | Time: {ep_time:.3f}s | ",
+                  f"Critic loss {critic_loss.item():.2f} | Actor loss {actor_loss.item():.2f} | Entropy loss {entropy_loss.item():.2f}"
+            )
             winrates.append(wins/args.log_interval)
             winrate_epochs.append(ep)
             t0 = time.time()
@@ -124,6 +144,7 @@ def train_ppo(env, model, args, device):
                 'winrate_epochs': winrate_epochs,
                 'actor_losses': actor_loss_hist,
                 'critic_losses': critic_loss_hist,
+                'entropy_losses': entropy_loss_hist,
                 'args': vars(args)
             }
             torch.save(temp_checkpoint, args.save_path)
@@ -137,12 +158,15 @@ def train_ppo(env, model, args, device):
         'winrate_epochs': winrate_epochs,
         'actor_losses': actor_loss_hist,
         'critic_losses': critic_loss_hist,
+        'entropy_losses': entropy_loss_hist,
         'args': vars(args)
     }
     torch.save(checkpoint, args.save_path)
     print(f"Final model and history saved to {args.save_path}")
 
 if __name__ == '__main__':
+    # Run with
+    # python ppo_train_cnn.py --episodes 20000 --save_path ppo/ppo_20k_cnn.pt --device cuda
     parser = argparse.ArgumentParser()
     parser.add_argument('--episodes', type=int, default=1000)
     parser.add_argument('--lr', type=float, default=3e-4)
