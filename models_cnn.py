@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 from torch.distributions import Normal
 
+from env_cnn import WIN_REWARD
+
 @torch.compile
 class ActorCriticNet(nn.Module):
     def __init__(self, obs_shape, act_dim):
@@ -11,34 +13,37 @@ class ActorCriticNet(nn.Module):
         
         # 1. CNN Feature Extractor
         self.cnn = nn.Sequential(
-            # Input: (Batch, 4, 64, 64)
-            nn.Conv2d(in_channels=channels, out_channels=32, kernel_size=8, stride=4),
+            # First Block
+            nn.Conv2d(channels, 32, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            # Output: (Batch, 32, 15, 15)
+            nn.MaxPool2d(kernel_size=2, stride=2), # 64x64 -> 32x32
             
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2),
+            # Second Block
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            # Output: (Batch, 64, 6, 6)
+            nn.MaxPool2d(kernel_size=2, stride=2), # 32x32 -> 16x16
             
-            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1),
+            # Third Block
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            # Output: (Batch, 64, 4, 4)
+            nn.MaxPool2d(kernel_size=2, stride=2), # 16x16 -> 8x8
             
             nn.Flatten()
         )
         
         # The output of the CNN is 64 * 4 * 4 = 1024 features
-        cnn_out_dim = 64 * 4 * 4
+        # cnn_out_dim = 64 * 4 * 4
+        cnn_out_dim = 64 * 8 * 8
         self.hidden_dim = 128
         
         # 2. Shared MLP on top of the CNN
         self.shared_mlp = nn.Sequential(
             nn.Linear(cnn_out_dim, self.hidden_dim),
             nn.Tanh(), # Tanh for continuous PPO stability
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.Tanh(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.Tanh(),
+            # nn.Linear(self.hidden_dim, self.hidden_dim),
+            # nn.Tanh(),
+            # nn.Linear(self.hidden_dim, self.hidden_dim),
+            # nn.Tanh(),
         )
         
         # Actor head
@@ -56,7 +61,7 @@ class ActorCriticNet(nn.Module):
         cnn_features = self.cnn(obs)
         features = self.shared_mlp(cnn_features)
         
-        value = self.critic(features)
+        value = self.critic(features) * -WIN_REWARD
         action_mean = torch.tanh(self.actor_mean(features))
         action_std = torch.exp(self.actor_logstd).expand_as(action_mean)
         
@@ -79,33 +84,36 @@ class ActorNet(nn.Module):
         
         # 1. CNN Feature Extractor
         self.cnn = nn.Sequential(
-            # Input: (Batch, 4, 64, 64)
-            nn.Conv2d(in_channels=channels, out_channels=32, kernel_size=8, stride=4),
+            # First Block
+            nn.Conv2d(channels, 32, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            # Output: (Batch, 32, 15, 15)
+            nn.MaxPool2d(kernel_size=2, stride=2), # 64x64 -> 32x32
             
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2),
+            # Second Block
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            # Output: (Batch, 64, 6, 6)
+            nn.MaxPool2d(kernel_size=2, stride=2), # 32x32 -> 16x16
             
-            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1),
+            # Third Block
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            # Output: (Batch, 64, 4, 4)
+            nn.MaxPool2d(kernel_size=2, stride=2), # 16x16 -> 8x8
             
             nn.Flatten()
         )
         
         # The output of the CNN is 64 * 4 * 4 = 1024 features
-        cnn_out_dim = 64 * 4 * 4
+        # cnn_out_dim = 64 * 4 * 4
+        cnn_out_dim = 64 * 8 * 8
         self.hidden_dim = 128
 
         self.net = nn.Sequential(
             nn.Linear(cnn_out_dim, self.hidden_dim),
             nn.Tanh(), # Tanh for continuous PPO stability
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.Tanh(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.Tanh(),
+            # nn.Linear(self.hidden_dim, self.hidden_dim),
+            # nn.Tanh(),
+            # nn.Linear(self.hidden_dim, self.hidden_dim),
+            # nn.Tanh(),
         )
 
         self.mean = nn.Linear(self.hidden_dim, act_dim)
@@ -130,33 +138,36 @@ class CriticNet(nn.Module):
         
         # 1. CNN Feature Extractor
         self.cnn = nn.Sequential(
-            # Input: (Batch, 4, 64, 64)
-            nn.Conv2d(in_channels=channels, out_channels=32, kernel_size=8, stride=4),
+            # First Block
+            nn.Conv2d(channels, 32, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            # Output: (Batch, 32, 15, 15)
+            nn.MaxPool2d(kernel_size=2, stride=2), # 64x64 -> 32x32
             
-            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=4, stride=2),
+            # Second Block
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            # Output: (Batch, 64, 6, 6)
+            nn.MaxPool2d(kernel_size=2, stride=2), # 32x32 -> 16x16
             
-            nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3, stride=1),
+            # Third Block
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
-            # Output: (Batch, 64, 4, 4)
+            nn.MaxPool2d(kernel_size=2, stride=2), # 16x16 -> 8x8
             
             nn.Flatten()
         )
         
         # The output of the CNN is 64 * 4 * 4 = 1024 features
-        cnn_out_dim = 64 * 4 * 4
+        # cnn_out_dim = 64 * 4 * 4
+        cnn_out_dim = 64 * 8 * 8
         self.hidden_dim = 64
 
         self.net = nn.Sequential(
             nn.Linear(cnn_out_dim, self.hidden_dim),
             nn.Tanh(), # Tanh for continuous PPO stability
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.Tanh(),
-            nn.Linear(self.hidden_dim, self.hidden_dim),
-            nn.Tanh(),
+            # nn.Linear(self.hidden_dim, self.hidden_dim),
+            # nn.Tanh(),
+            # nn.Linear(self.hidden_dim, self.hidden_dim),
+            # nn.Tanh(),
         )
         self.value = nn.Linear(self.hidden_dim, 1)
 
@@ -166,5 +177,61 @@ class CriticNet(nn.Module):
             
         cnn_features = self.cnn(obs)
         x = self.net(cnn_features)
-        value = self.value(x)
+        value = self.value(x) * -WIN_REWARD
         return value
+
+class SharedACNet(nn.Module):
+    def __init__(self, obs_shape, act_dim):
+        super(SharedACNet, self).__init__()
+        channels = obs_shape[0]
+        
+        # 1. THE SHARED EYES (CNN)
+        self.cnn = nn.Sequential(
+            # First Block
+            nn.Conv2d(channels, 32, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2), # 64x64 -> 32x32
+            
+            # Second Block
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2), # 32x32 -> 16x16
+            
+            # Third Block
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=2, stride=2), # 16x16 -> 8x8
+            
+            nn.Flatten()
+        )
+        
+        # Calculate this based on your final pooling size
+        cnn_out_dim = 64 * 8 * 8 
+        self.hidden_dim = 128
+        
+        # 2. THE ACTOR HEAD
+        self.actor_mlp = nn.Sequential(
+            nn.Linear(cnn_out_dim, self.hidden_dim),
+            nn.Tanh(),
+            nn.Linear(self.hidden_dim, act_dim),
+        )
+        self.log_std = nn.Parameter(torch.zeros(1, act_dim))
+        
+        # 3. THE CRITIC HEAD
+        self.critic_mlp = nn.Sequential(
+            nn.Linear(cnn_out_dim, self.hidden_dim),
+            nn.Tanh(),
+            nn.Linear(self.hidden_dim, 1),
+        )
+
+    def forward(self, x):
+        features = self.cnn(x)
+        
+        # Actor branch
+        mu = torch.tanh(self.actor_mlp(features))
+        std = torch.exp(self.log_std).expand_as(mu)
+        
+        # Critic branch
+        value = self.critic_mlp(features)
+        
+        return mu, std, value
