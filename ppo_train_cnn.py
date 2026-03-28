@@ -96,7 +96,7 @@ def train_ppo(env, model, args, device):
             entropy_loss = dist.entropy().sum(dim=-1).mean()
             
             c_critic = torch.tensor(0.5, dtype=torch.float32, device=device)
-            c_entropy = torch.tensor(0.03, dtype=torch.float32, device=device)
+            c_entropy = torch.tensor(0.0075, dtype=torch.float32, device=device)
             # Force each component to float32 and ensure they are on the right device
             actor_loss = actor_loss.to(device=device, dtype=torch.float32)
             critic_loss = critic_loss.to(device=device, dtype=torch.float32)

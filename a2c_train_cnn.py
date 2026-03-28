@@ -12,6 +12,12 @@ from env_cnn import HarryPotterEnv
 
 def train_a2c(env, model, args, device):
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    scheduler = torch.optim.lr_scheduler.LinearLR(
+        optimizer, 
+        start_factor=1.0, 
+        end_factor=0.01, # Ends at 1% of the initial LR
+        total_iters=args.episodes
+    )
     
     rewards_hist = []
     actor_loss_hist = []
@@ -102,6 +108,7 @@ def train_a2c(env, model, args, device):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        scheduler.step()
         
         ep_time = time.time() - start_time
         ep_reward = sum(rewards)
@@ -111,10 +118,11 @@ def train_a2c(env, model, args, device):
         critic_loss_hist.append(critic_loss.item())
 
         if info.get('result') == "escaped": wins += 1
+        current_lr = scheduler.get_last_lr()[0]
         
         if ep % args.log_interval == 0:
             print(f"Shared A2C | Ep: {ep} | Reward: {ep_reward:.2f} | Winrate {wins/args.log_interval:.2f} | Time: {ep_time:.3f}s | ",
-                  f"Critic loss {critic_loss.item():.2f} | Actor loss {actor_loss.item():.2f}"
+                  f"Critic loss {critic_loss.item():.2f} | Actor loss {actor_loss.item():.2f} | Current LR: {current_lr:.6f}"
                 #  "| Result: {info.get('result', 'N/A')}"
                 )
             winrates.append(wins/args.log_interval)

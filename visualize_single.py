@@ -50,10 +50,12 @@ def plot_detailed_results(file_path, method_name):
 
     # --- 2. Winrates ---
     ax = axs[0, 1]
+    smooth_step_winrates = max(1, len(winrates) // 100)
+    x_axis = winrate_epochs if winrate_epochs else np.arange(len(winrates))
+    ax.plot(x_axis, np.array(winrates) * 100, color='palegreen', alpha=0.3)
     if len(winrates) > 0:
         # If winrate_epochs isn't provided, assume standard log intervals
-        x_axis = winrate_epochs if winrate_epochs else np.arange(len(winrates))
-        ax.plot(x_axis, np.array(winrates) * 100, marker='o', markersize=3, color='green', linestyle='-', linewidth=1)
+        ax.plot(x_axis[smooth_step_winrates-1:], smooth_curve(np.array(winrates) * 100, smooth_step_winrates), color='green', linestyle='-', linewidth=1)
         ax.set_title('Winrate Percentage (%)')
         ax.set_ylabel('Winrate %')
     else:
