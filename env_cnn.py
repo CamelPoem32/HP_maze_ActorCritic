@@ -2,6 +2,8 @@ import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 
+WIN_REWARD = 1e2
+
 class HarryPotterEnv(gym.Env):
     def __init__(self):
         super(HarryPotterEnv, self).__init__()
@@ -27,10 +29,12 @@ class HarryPotterEnv(gym.Env):
         self.catch_radius = 0.4
         self.goal_radius = 0.5
         self.time_penalty = 1e-2
-        self.lose_reward = -1e3
-        self.win_reward = 1e4
-        self.distance_scaler = 3e1 / (self.field_size**2)
-        self.distance_scaler_enemy = self.distance_scaler / ((self.field_size/self.smell_radius+1)**2)
+        self.lose_reward = -1e2
+        self.win_reward = WIN_REWARD
+        self.distance_scaler = 1e1/ self.field_size
+        self.distance_scaler_enemy = self.distance_scaler / (self.field_size/self.smell_radius+1)
+        self.outer_bump_penalty = 1.0
+        self.bump_penalty = 2.0
         
         self.walls = [
             [4.0, 6.0, 0.0, 4.0],  # Bottom wall
@@ -145,24 +149,38 @@ class HarryPotterEnv(gym.Env):
 
     def step(self, action):
         self.steps += 1
-        reward = -self.time_penalty # Time penalty
-        reward += -np.float32(np.linalg.norm((self.goal_pos - self.harry_pos)**2)*self.distance_scaler) # Distance to goal penalty
-        reward += np.float32(np.linalg.norm((self.last_seen_filch - self.harry_pos)**2)*self.distance_scaler_enemy) # Distance to Filch penalty
-        reward += np.float32(np.linalg.norm((self.last_seen_cat - self.harry_pos)**2)*self.distance_scaler_enemy) # Distance to mrs. Norris penalty
         done = False
         info = {}
 
         # 1. Move Harry
         action = np.clip(action, -1.0, 1.0)
-        new_harry = self.harry_pos + action * self.agent_speed
-        if not self._is_in_wall(new_harry):
+        move_vector = action * self.agent_speed
+        new_harry = self.harry_pos + move_vector
+        
+        # 2. Elegant Wall Handling (Sliding)
+        wall_type = self._is_in_wall(new_harry)
+        if wall_type == 0: # No wall
             self.harry_pos = new_harry
-        elif self._is_in_wall(new_harry) == 1:          # In wall, not in game border
-            reward = self.lose_reward
+            step_reward = 0.0 # Small time penalty
+        elif wall_type == 1: # Hit internal wall
+            # Instead of lose_reward, give a small "bump" penalty
+            step_reward = -self.bump_penalty 
+            # Try to slide: move only in X then only in Y
+            # This helps the agent "feel" its way around corners
+            if not self._is_in_wall(np.array([new_harry[0], self.harry_pos[1]])):
+                self.harry_pos[0] = new_harry[0]
+            elif not self._is_in_wall(np.array([self.harry_pos[0], new_harry[1]])):
+                self.harry_pos[1] = new_harry[1]
+        else: # Hit game border
+            step_reward = -self.outer_bump_penalty
 
-            # print(np.min(self.get_walls_distance()))
-            done = True
-            info['result'] = 'wall'
+        dist_to_goal = np.linalg.norm(self.goal_pos - self.harry_pos)
+        filch_dist = np.linalg.norm(self.harry_pos - self.last_seen_filch)
+        cat_dist = np.linalg.norm(self.harry_pos - self.last_seen_cat)
+        reward = -self.time_penalty + step_reward # Time penalty
+        reward += -dist_to_goal*self.distance_scaler # Distance to goal penalty
+        reward += filch_dist*self.distance_scaler_enemy # Distance to Filch penalty
+        reward += cat_dist*self.distance_scaler_enemy # Distance to mrs. Norris penalty
 
         # 2. Move Enemies
         # Filch logic: random waypoints
@@ -197,6 +215,10 @@ class HarryPotterEnv(gym.Env):
             reward = self.lose_reward
             done = True
             info['result'] = 'timeout'
+            
+        # THE MAGIC FIX: Symlog scaling
+        # This maps -10,000 to ~ -9 and +100 to ~ +4.6
+        # reward = np.sign(reward) * np.log1p(np.abs(reward))
 
         return self._get_obs(), reward, done, False, info
 
