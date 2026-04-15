@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from torch.distributions import Normal
+import torch.nn.functional as F
 
 from env_cnn import WIN_REWARD
 
@@ -180,6 +181,7 @@ class CriticNet(nn.Module):
         value = self.value(x) * -WIN_REWARD
         return value
 
+@torch.compile
 class SharedACNet(nn.Module):
     def __init__(self, obs_shape, act_dim):
         super(SharedACNet, self).__init__()
@@ -235,3 +237,103 @@ class SharedACNet(nn.Module):
         value = self.critic_mlp(features)
         
         return mu, std, value
+
+
+
+
+@torch.compile
+class ActorMLP(nn.Module):
+    def __init__(self, input_dim, act_dim, hidden_dim):
+        super(ActorMLP, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+        )
+        self.mu = nn.Linear(hidden_dim, act_dim)
+        self.log_std = nn.Linear(hidden_dim, act_dim)
+
+    def forward(self, x):
+        x = self.fc(x)
+        mu = self.mu(x)
+        log_std = torch.clamp(self.log_std(x), -20, 2)
+        return mu, log_std
+
+@torch.compile
+class CriticMLP(nn.Module):
+    def __init__(self, input_dim, act_dim, hidden_dim):
+        super(CriticMLP, self).__init__()
+        self.fc = nn.Sequential(
+            nn.Linear(input_dim + act_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+
+    def forward(self, features, action):
+        x = torch.cat([features, action], dim=1)
+        return self.fc(x)
+
+@torch.compile
+class SACNet(nn.Module):
+    def __init__(self, obs_shape, act_dim, hidden_dim=256):
+        super(SACNet, self).__init__()
+        channels = obs_shape[0]
+        
+        # 1. Shared CNN Feature Extractor
+        self.cnn = nn.Sequential(
+            nn.Conv2d(channels, 32, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(32, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Conv2d(64, 64, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Flatten()
+        )
+        
+        # Assuming 64x64 input -> after 3 MaxPools (8x8) -> 64 * 8 * 8 = 4096
+        cnn_out_dim = 64 * 8 * 8 
+
+        # 2. Heads as distinct fields
+        self.actor = ActorMLP(cnn_out_dim, act_dim, hidden_dim)
+        self.critic1 = CriticMLP(cnn_out_dim, act_dim, hidden_dim)
+        self.critic2 = CriticMLP(cnn_out_dim, act_dim, hidden_dim)
+        
+        # 3. Target Networks
+        self.target_critic1 = CriticMLP(cnn_out_dim, act_dim, hidden_dim)
+        self.target_critic2 = CriticMLP(cnn_out_dim, act_dim, hidden_dim)
+        self.target_critic1.load_state_dict(self.critic1.state_dict())
+        self.target_critic2.load_state_dict(self.critic2.state_dict())
+
+    def get_action(self, obs, epsilon=1e-6):
+        features = self.cnn(obs)
+        mu, log_std = self.actor(features)
+        std = log_std.exp()
+
+        dist = Normal(mu, std)
+        z = dist.rsample() # Reparameterization trick
+        action = torch.tanh(z)
+
+        # Correction for Tanh squashing
+        log_prob = dist.log_prob(z) - torch.log(1 - action.pow(2) + epsilon)
+        return action, log_prob.sum(-1, keepdim=True), torch.tanh(mu)
+
+    def get_q(self, obs, action):
+        features = self.cnn(obs)
+        return self.critic1(features, action), self.critic2(features, action)
+
+    def get_target_q(self, obs, action):
+        with torch.no_grad():
+            features = self.cnn(obs)
+            return self.target_critic1(features, action), self.target_critic2(features, action)
+
+    def soft_update_targets(self, tau):
+        for param, target_param in zip(self.critic1.parameters(), self.target_critic1.parameters()):
+            target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
+        for param, target_param in zip(self.critic2.parameters(), self.target_critic2.parameters()):
+            target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
