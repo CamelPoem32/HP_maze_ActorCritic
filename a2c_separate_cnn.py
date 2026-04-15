@@ -55,7 +55,7 @@ def train_a2c_separate(env, model, args, device):
         obs, _ = env.reset()
         # Buffers for the trajectory
         log_probs, values, rewards = [], [], []
-        next_obses, masks, entropies = [], [], []
+        next_obses, masks, entropies, actions = [], [], [], []
         done = False
         
         # 1. Collect Trajectory (Environment Loop)
@@ -81,6 +81,7 @@ def train_a2c_separate(env, model, args, device):
             next_obses.append(next_obs)
             masks.append(1.0 - done) 
             entropies.append(entropy)
+            actions.append(action)
             
             obs = next_obs
             
@@ -90,6 +91,8 @@ def train_a2c_separate(env, model, args, device):
         rewards_t = torch.FloatTensor(rewards).to(device)
         masks_t = torch.FloatTensor(masks).to(device)
         entropy_t = torch.cat(entropies).mean()
+        actions_t = torch.stack(actions).to(device)
+
         
         # Batch all next observations for a single Critic call
         next_obs_batch = torch.FloatTensor(np.array(next_obses)).to(device)
@@ -105,34 +108,46 @@ def train_a2c_separate(env, model, args, device):
         # We multiply by masks_t so terminal state value is exactly 0
         td_targets = rewards_t + args.gamma * next_values_t * masks_t
         
-        # Advantage: (Actual Outcome) - (Our Baseline)
-        advantages = td_targets - values_t
-
-        # 4. Separate Loss Calculation
-        # Actor Loss: Log_prob * Advantage + Entropy Bonus
-        # Note: We detach advantage so it doesn't try to train the Critic through this loss
-        actor_loss = -(log_probs_t * advantages.detach()).mean() - 0.01 * entropy_t
-        
-        # Critic Loss: MSE between current value estimate and TD-Target
+        # --- 4. Critic update FIRST ---
         critic_loss = torch.nn.MSELoss()(values_t, td_targets)
 
-        loss = actor_loss + 0.5 * critic_loss - 0.01 * entropy_t
-
-        # # 5. Optimization
-        # # If you have separate optimizers:
-        # actor_opt.zero_grad()
-        # actor_loss.backward()
-        # torch.nn.utils.clip_grad_norm_(actor.parameters(), 0.5)
-        # actor_opt.step()
-        # critic_opt.zero_grad()
-        # critic_loss.backward()
-        # torch.nn.utils.clip_grad_norm_(critic.parameters(), 0.5)
-        # critic_opt.step()
-
-        # 5. Single Optimization Step
         optimizer.zero_grad()
-        loss.backward()
-        # Clip gradients to prevent CNN weights from exploding
+        critic_loss.backward()
+        nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        optimizer.step()
+
+
+        # --- 5. RECOMPUTE forward pass AFTER critic update ---
+        obs_batch = torch.FloatTensor(np.array(next_obses)).to(device)
+
+        mean_new, std_new, values_new = model(obs_batch)
+        values_new = values_new.view(-1)
+
+        dist_new = torch.distributions.Normal(mean_new, std_new)
+
+        # NOTE: reuse SAME actions implicitly via log_probs
+        # but better is to store actions explicitly (recommended)
+
+
+        # --- 6. Recompute advantages with UPDATED critic ---
+        with torch.no_grad():
+            _, _, next_values_new = model(next_obs_batch)
+            next_values_new = next_values_new.view(-1)
+
+        td_targets_new = rewards_t + args.gamma * next_values_new * masks_t
+        advantages_new = td_targets_new - values_new
+
+
+        # --- 7. Actor loss with UPDATED baseline ---
+        log_probs_new = dist_new.log_prob(actions_t).sum(dim=-1)  # better if stored
+        entropy_new = dist_new.entropy().sum(dim=-1).mean()
+
+        actor_loss = -(log_probs_new * advantages_new.detach()).mean() - 0.01 * entropy_new
+
+
+        # --- 8. Actor update ---
+        optimizer.zero_grad()
+        actor_loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
         

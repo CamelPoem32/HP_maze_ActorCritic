@@ -218,7 +218,7 @@ class HarryPotterEnv(gym.Env):
             
         # THE MAGIC FIX: Symlog scaling
         # This maps -10,000 to ~ -9 and +100 to ~ +4.6
-        # reward = np.sign(reward) * np.log1p(np.abs(reward))
+        reward = np.sign(reward) * np.log1p(np.abs(reward))
 
         return self._get_obs(), reward, done, False, info
 
