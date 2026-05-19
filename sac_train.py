@@ -160,7 +160,7 @@ def train_sac(args):
     q_opt = optim.Adam(list(q1.parameters()) + list(q2.parameters()), lr=args.lr)
 
     # Automatic entropy temperature tuning
-    target_entropy = -float(act_dim) if args.target_entropy is None else float(args.target_entropy)
+    target_entropy = -0.25*float(act_dim) if args.target_entropy is None else float(args.target_entropy)
     log_alpha = torch.tensor(np.log(args.init_alpha), device=device, requires_grad=True)
     alpha_opt = optim.Adam([log_alpha], lr=args.lr)
 

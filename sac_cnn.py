@@ -80,10 +80,10 @@ def train_sac(env, model, args, device):
     actor_params = list(model.actor.parameters()) + list(model.cnn.parameters())
     critic_params = list(model.critic1.parameters()) + list(model.critic2.parameters()) + list(model.cnn.parameters())
     actor_opt = optim.Adam(actor_params, lr=args.lr)
-    critic_opt = optim.Adam(critic_params, lr=args.lr)
+    critic_opt = optim.Adam(critic_params, lr=args.lr) # Slower LR for critics can help stabilize training
     
     # Adaptive Entropy (Alpha) Setup
-    target_entropy = -np.prod(env.action_space.shape).item() # Heuristic: -dim(A)
+    target_entropy = -0.5 * np.prod(env.action_space.shape).item() # Heuristic: -dim(A)
     log_alpha = torch.zeros(1, requires_grad=True, device=device)
     alpha_opt = optim.Adam([log_alpha], lr=args.lr)
     
@@ -101,15 +101,26 @@ def train_sac(env, model, args, device):
     actor_loss_history = []
     critic_loss_history = []
     alpha_loss_history = []
+    
+    # Diagnostic Histories
+    entropy_history = []
+    q_mean_history = []
+    q_gap_history = []      # Difference between Q1 and Q2
+    target_q_history = []   # What the critic is trying to reach
+    std_mean_history = []   # How "random" the policy is
+    
     winrates, winrate_epochs = [], []
     start_episode = 0
     wins = 0
+
+    global_step = 0
 
     # --- CHECKPOINT LOADING ---
     if args.load_path and os.path.isfile(args.load_path):
         print(f"Loading checkpoint from {args.load_path}...")
         checkpoint = torch.load(args.load_path, map_location=device, weights_only=False)
-        
+
+        global_step = checkpoint['global_step']
         model.load_state_dict(checkpoint['model_state_dict'])
         actor_opt.load_state_dict(checkpoint['actor_opt_state_dict'])
         critic_opt.load_state_dict(checkpoint['critic_opt_state_dict'])
@@ -123,116 +134,160 @@ def train_sac(env, model, args, device):
         critic_loss_history = checkpoint.get('critic_losses', [])
         alpha_loss_history = checkpoint.get('alpha_losses', [])
         start_episode = len(rewards_history)
+        # New Diagnostics
+        entropy_history = checkpoint.get('entropies', [])
+        q_mean_history = checkpoint.get('q_means', [])
+        q_gap_history = checkpoint.get('q_gaps', [])
+        target_q_history = checkpoint.get('target_qs', [])
+        std_mean_history = checkpoint.get('std_means', [])
         
         print(f"Resuming from episode {start_episode}")
     elif args.load_path:
         print(f"Warning: {args.load_path} not found. Starting fresh.")
 
     obs, _ = env.reset()
-    ep_reward = 0
-    t0 = time.time()
-    start_time = time.time()
+    episode_reward = 0.0
+    episode_length = 0
+    episode_idx = start_episode
+    update_step = 0
 
-    for ep in range(start_episode, start_episode + args.episodes):
-        done = False
-        # 1. Warmup / Action Selection
-        if ep < args.warmup_steps:
+    start_time = time.time()
+    last_log_step = 0
+
+    while episode_idx < args.episodes:
+
+        # ===== ACTION SELECTION =====
+        if global_step < args.warmup_steps:
             action = env.action_space.sample()
         else:
             with torch.no_grad():
-                obs_tensor = torch.FloatTensor(obs).float().unsqueeze(0).to(device)
-                # t0 = time.time()
-                action, _, _ = model.get_action(obs_tensor) # Expects squashed action
-                # print(f"t_act = {time.time() - t0:.3f}s)")
+                obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(device)
+                action, _, _ = model.get_action(obs_tensor)
                 action = action.cpu().numpy()[0]
-                
-        while not done:
-            # 2. Environment Step
-            # t0 = time.time()
-            next_obs, reward, done, _, info = env.step(action)
-            # print(f"t_step = {time.time() - t0:.3f}s)")
-            ep_reward += reward
-            
-            # 3. Store in Buffer
-            replay_buffer.push(obs, action, reward, next_obs, float(done))
-            obs = next_obs
-            
-            if done:
-                obs, _ = env.reset()
-                rewards_history.append(ep_reward)
-                if info.get('result') == "escaped": 
-                    wins += 1
-                ep_reward = 0
 
-        # 4. Training
-        # t0 = time.time()
-        if replay_buffer.size > args.batch_size and ep >= args.warmup_steps:
-            # Sample Batch
-            b_states, b_actions, b_rewards, b_next_states, b_dones = replay_buffer.sample(args.batch_size)
-            
-            alpha = log_alpha.exp().detach()
+        # ===== ENV STEP =====
+        next_obs, reward, done, _, info = env.step(action)
 
-            # --- CRITIC UPDATE ---
-            with torch.no_grad():
-                next_actions, next_log_probs, _ = model.get_action(b_next_states)
-                target_q1, target_q2 = model.get_target_q(b_next_states, next_actions)
-                target_v = torch.min(target_q1, target_q2) - alpha * next_log_probs
-                target_q = b_rewards + (1 - b_dones) * args.gamma * target_v
+        replay_buffer.push(obs, action, reward, next_obs, float(done))
 
-            current_q1, current_q2 = model.get_q(b_states, b_actions)
-            critic_loss = F.mse_loss(current_q1, target_q) + F.mse_loss(current_q2, target_q)
+        obs = next_obs
+        episode_reward += reward
+        episode_length += 1
+        global_step += 1
 
-            critic_opt.zero_grad()
-            critic_loss.backward()
-            nn.utils.clip_grad_norm_(critic_params, 0.5)
-            critic_opt.step()
+        # ===== TRAINING =====
+        if (
+            global_step >= args.warmup_steps
+            and replay_buffer.size > args.batch_size
+            and global_step % args.train_freq == 0
+        ):
+            for _ in range(args.gradient_steps):
+                b_states, b_actions, b_rewards, b_next_states, b_dones = replay_buffer.sample(args.batch_size)
 
-            # --- ACTOR UPDATE ---
-            curr_actions, curr_log_probs, _ = model.get_action(b_states)
-            q1_pi, q2_pi = model.get_q(b_states, curr_actions)
-            min_q_pi = torch.min(q1_pi, q2_pi)
-            
-            actor_loss = ((alpha * curr_log_probs) - min_q_pi).mean()
+                alpha = log_alpha.exp().detach()
 
-            actor_opt.zero_grad()
-            actor_loss.backward()
-            nn.utils.clip_grad_norm_(actor_params, 0.5)
-            actor_opt.step()
+                # --- CRITIC ---
+                with torch.no_grad():
+                    next_actions, next_log_probs, _ = model.get_action(b_next_states)
+                    target_q1, target_q2 = model.get_target_q(b_next_states, next_actions)
+                    # Ensure shapes match [batch_size, 1]
+                    next_log_probs = next_log_probs.view(-1, 1) 
+                    target_q1 = target_q1.view(-1, 1)
+                    target_q2 = target_q2.view(-1, 1)
+                    target_v = torch.min(target_q1, target_q2) - alpha * next_log_probs
+                    target_q = b_rewards + (1 - b_dones) * args.gamma * target_v
 
-            # --- ALPHA UPDATE ---
-            alpha_loss = -(log_alpha * (curr_log_probs + target_entropy).detach()).mean()
+                current_q1, current_q2 = model.get_q(b_states, b_actions)
+                current_q1 = current_q1.view(-1, 1)
+                current_q2 = current_q2.view(-1, 1)
+                critic_loss = F.mse_loss(current_q1, target_q) + F.mse_loss(current_q2, target_q)
 
-            alpha_opt.zero_grad()
-            alpha_loss.backward()
-            alpha_opt.step()
+                critic_opt.zero_grad()
+                critic_loss.backward()
+                nn.utils.clip_grad_norm_(critic_params, 0.5)
+                critic_opt.step()
 
-            # --- SOFT UPDATE TARGET NETWORKS ---
-            model.soft_update_targets(args.tau)
+                # --- ACTOR ---
+                curr_actions, curr_log_probs, _ = model.get_action(b_states)
+                q1_pi, q2_pi = model.get_q(b_states, curr_actions)
+                min_q_pi = torch.min(q1_pi, q2_pi)
 
-            # Store metrics
-            actor_loss_history.append(actor_loss.item())
-            critic_loss_history.append(critic_loss.item())
-            alpha_loss_history.append(alpha_loss.item())
-        # print(f"ep {ep} | t_upd = {time.time() - t0:.3f}s)")
+                actor_loss = ((alpha * curr_log_probs) - min_q_pi).mean()
 
-        # 5. Logging
-        if done and ep % args.log_interval == 0 and ep >= args.warmup_steps and replay_buffer.size > args.batch_size:
-            ep_time = time.time() - start_time
-            avg_reward = np.mean(rewards_history[-args.log_interval:])
-            current_alpha = log_alpha.exp().item()
-            
-            print(f"SAC | Ep: {ep} | Avg Reward: {avg_reward:.2f} | Winrate {wins/args.log_interval:.2f} | Time: {ep_time:.3f}s | ",
-                  f"Critic L: {critic_loss.item():.2f} | Actor L: {actor_loss.item():.2f} | Alpha L: {alpha_loss.item():.2f} | Alpha: {current_alpha:.4f}"
-            )
-            
-            winrates.append(wins/args.log_interval)
-            winrate_epochs.append(ep)
-            wins = 0
-            start_time = time.time()
+                actor_opt.zero_grad()
+                actor_loss.backward()
+                nn.utils.clip_grad_norm_(actor_params, 0.5)
+                actor_opt.step()
 
-        # 6. Periodic Save
-        if ep % args.save_interval == 0 and ep > args.warmup_steps:
+                # --- ALPHA ---
+                alpha_loss = -(log_alpha * (curr_log_probs + target_entropy).detach()).mean()
+
+                alpha_opt.zero_grad()
+                alpha_loss.backward()
+                alpha_opt.step()
+
+                # --- DIAGNOSTIC METRIC CALCULATION ---
+                with torch.no_grad():
+                    # 1. Entropy: SAC tries to keep this high
+                    entropy_history.append(-curr_log_probs.mean().item())
+
+                    # 2. Q-Values: Track if they are exploding or collapsing
+                    q_mean_history.append(current_q1.mean().item())
+                    target_q_history.append(target_q.mean().item())
+
+                    # 3. Q-Gap: Are the two critics diverging?
+                    # Calculation: mean(abs(Q1 - Q2))
+                    q_gap = (current_q1 - current_q2).abs().mean().item()
+                    q_gap_history.append(q_gap)
+
+                    # 4. Policy Std: How "brave" is the agent?
+                    _, _, curr_mean = model.get_action(b_states) 
+                    std_mean_history.append(curr_mean.mean().item())
+
+                model.soft_update_targets(args.tau)
+
+                update_step += 1
+
+                # store metrics
+                actor_loss_history.append(actor_loss.item())
+                critic_loss_history.append(critic_loss.item())
+                alpha_loss_history.append(alpha_loss.item())
+
+        # ===== EPISODE END =====
+        if done:
+            rewards_history.append(episode_reward)
+
+            if info.get('result') == "escaped":
+                wins += 1
+
+            episode_idx += 1
+
+            # logging
+            if episode_idx % args.log_interval == 0:
+                avg_reward = np.mean(rewards_history[-args.log_interval:])
+                current_alpha = log_alpha.exp().item()
+
+                print(
+                    f"SAC | Ep: {episode_idx} | "
+                    f"AvgR: {avg_reward:.2f} | "
+                    f"Winrate: {wins/args.log_interval:.2f} | "
+                    f"Alpha: {current_alpha:.4f} | "
+                    f"Steps: {global_step}"
+                )
+
+                winrates.append(wins / args.log_interval)
+                winrate_epochs.append(episode_idx)
+                wins = 0
+
+            # reset
+            obs, _ = env.reset()
+            episode_reward = 0.0
+            episode_length = 0
+
+        # ===== SAVE =====
+        if global_step % args.save_interval == 0 and global_step > args.warmup_steps:
             torch.save({
+                'global_step': global_step,
                 'model_state_dict': model.state_dict(),
                 'actor_opt_state_dict': actor_opt.state_dict(),
                 'critic_opt_state_dict': critic_opt.state_dict(),
@@ -244,24 +299,31 @@ def train_sac(env, model, args, device):
                 'actor_losses': actor_loss_history,
                 'critic_losses': critic_loss_history,
                 'alpha_losses': alpha_loss_history,
+                'entropies': entropy_history,
+                'q_means': q_mean_history,
+                'q_gaps': q_gap_history,
+                'target_qs': target_q_history,
+                'std_means': std_mean_history,
             }, args.save_path)
-
+        
     # --- FINAL SAVE ---
     print(f"Training finished. Final model saved to {args.save_path}")
 
 if __name__ == '__main__':
     # Run with
-    # python sac_cnn.py --episodes 20000 --save_path sac/sac_cnn.pt --device cuda
+    # python sac_cnn.py --episodes 20000 --device cuda --buffer_device cuda --save_path sac/sac_cnn_20k.pt --gradient_steps 5 --tau 0.001
     parser = argparse.ArgumentParser()
     parser.add_argument('--episodes', type=int, default=20000)
-    parser.add_argument('--warmup_steps', type=int, default=40, help="Random actions before training starts")
-    parser.add_argument('--buffer_size', type=int, default=20000)
-    parser.add_argument('--batch_size', type=int, default=1000)
+    parser.add_argument('--warmup_steps', type=int, default=20_000, help="Random actions before training starts")
+    parser.add_argument('--buffer_size', type=int, default=100_000)
+    parser.add_argument('--train_freq', type=int, default=1)
+    parser.add_argument('--gradient_steps', type=int, default=1)
+    parser.add_argument('--batch_size', type=int, default=256)
     parser.add_argument('--lr', type=float, default=3e-4)
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--tau', type=float, default=0.005, help="Target network soft update rate")
-    parser.add_argument('--log_interval', type=int, default=100)
-    parser.add_argument('--save_interval', type=int, default=1000)
+    parser.add_argument('--log_interval', type=int, default=10)
+    parser.add_argument('--save_interval', type=int, default=100)
     parser.add_argument('--save_path', type=str, default='sac/sac_cnn.pt')
     parser.add_argument('--load_path', type=str, default=None)
     parser.add_argument('--device', type=str, default='cpu')
