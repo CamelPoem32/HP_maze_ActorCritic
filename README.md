@@ -86,14 +86,14 @@ $$L_{CLIP}(\theta) = \mathbb{E} [\min(r_t(\theta)A_t, \text{clip}(r_t(\theta), 1
 
 ### Training Metrics
 
-![Episode Rewards](a2c_metrics_reward.png)
-*Figure 1: Уpisode rewards over time.*
+![a2c_shared](a2c_detailed.png)
+*Figure 1: A2C_shared metrics over time.*
 
-![Winrate vs Epochs](a2c_metrics_winrate.png)
-*Figure 2: Winrate percentage evaluated at fixed epoch intervals.*
+![a2c_separate](a2c_separate_detailed.png)
+*Figure 2: A2C_separate metrics over time.*
 
-![Actor and Critic Loss](a2c_metrics_loss.png)
-*Figure 3: Critic Loss dynamics.*
+![ppo](ppo_detailed.png)
+*Figure 3: PPO metrics over time.*
 
 ### Conclusion
-Actor-Critic with CNN reached the acceptable performance over limited training time, other architectures didn't provide results better than starting ones. So, further comparison of all architectures can be done.
+Actor-Critic with CNN reached the acceptable performance over limited training time, other architectures didn't provide meaningful results. So, further comparison of all architectures can be done.
