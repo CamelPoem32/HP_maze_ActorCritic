@@ -111,10 +111,10 @@ def train_a2c_separate(env, model, args, device):
         # --- 4. Critic update FIRST ---
         critic_loss = torch.nn.MSELoss()(values_t, td_targets)
 
-        optimizer.zero_grad()
-        critic_loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-        optimizer.step()
+        # optimizer.zero_grad()
+        # critic_loss.backward()
+        # nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        # optimizer.step()
 
 
         # --- 5. RECOMPUTE forward pass AFTER critic update ---
@@ -143,11 +143,17 @@ def train_a2c_separate(env, model, args, device):
         entropy_new = dist_new.entropy().sum(dim=-1).mean()
 
         actor_loss = -(log_probs_new * advantages_new.detach()).mean() - 0.01 * entropy_new
+        loss = actor_loss + 0.5 * critic_loss - 0.01 * entropy
 
-
-        # --- 8. Actor update ---
+        # # --- 8. Actor update ---
+        # optimizer.zero_grad()
+        # actor_loss.backward()
+        # nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        # optimizer.step()
+        
+        # --- 7. Single Update ---
         optimizer.zero_grad()
-        actor_loss.backward()
+        loss.backward()
         nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
         

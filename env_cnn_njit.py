@@ -134,7 +134,7 @@ class HarryPotterEnv(gym.Env):
                                             dtype=np.float32)
         
         # Maze parameters (Same as before)
-        self.max_steps = 500
+        self.max_steps = 100
         self.agent_speed = 0.4
         self.enemy_speed = 0.25
         self.smell_radius = 2.5
@@ -327,7 +327,7 @@ class HarryPotterEnv(gym.Env):
             
         # THE MAGIC FIX: Symlog scaling
         # This maps -10,000 to ~ -9 and +100 to ~ +4.6
-        reward = np.sign(reward) * np.log1p(np.abs(reward))
+        # reward = np.sign(reward) * np.log1p(np.abs(reward))
 
         return self._get_obs(), reward, done, False, info
 

@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 from torch.distributions import Normal
 import torch.nn.functional as F
+import copy
 
-from env_cnn import WIN_REWARD
+from env_cnn_njit import WIN_REWARD
 
 @torch.compile
 class ActorCriticNet(nn.Module):
@@ -252,12 +253,12 @@ class ActorMLP(nn.Module):
             nn.ReLU(),
         )
         self.mu = nn.Linear(hidden_dim, act_dim)
-        self.log_std = nn.Linear(hidden_dim, act_dim)
+        self.log_std = nn.Parameter(torch.zeros(1, act_dim))
 
     def forward(self, x):
         x = self.fc(x)
         mu = self.mu(x)
-        log_std = torch.clamp(self.log_std(x), -20, 2)
+        log_std = torch.clamp(self.log_std, -20, 2)
         return mu, log_std
 
 @torch.compile
@@ -282,7 +283,7 @@ class SACNet(nn.Module):
         super(SACNet, self).__init__()
         channels = obs_shape[0]
         
-        # 1. Shared CNN Feature Extractor
+        # 1. Live Encoder
         self.cnn = nn.Sequential(
             nn.Conv2d(channels, 32, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
@@ -296,19 +297,24 @@ class SACNet(nn.Module):
             nn.Flatten()
         )
         
-        # Assuming 64x64 input -> after 3 MaxPools (8x8) -> 64 * 8 * 8 = 4096
+        # 2. Target Encoder (The "Stable" Eyes)
+        self.target_cnn = copy.deepcopy(self.cnn)
+        # We don't need gradients for target_cnn
+        for p in self.target_cnn.parameters():
+            p.requires_grad = False
+
         cnn_out_dim = 64 * 8 * 8 
 
-        # 2. Heads as distinct fields
+        # 3. Live Heads
         self.actor = ActorMLP(cnn_out_dim, act_dim, hidden_dim)
         self.critic1 = CriticMLP(cnn_out_dim, act_dim, hidden_dim)
         self.critic2 = CriticMLP(cnn_out_dim, act_dim, hidden_dim)
         
-        # 3. Target Networks
-        self.target_critic1 = CriticMLP(cnn_out_dim, act_dim, hidden_dim)
-        self.target_critic2 = CriticMLP(cnn_out_dim, act_dim, hidden_dim)
-        self.target_critic1.load_state_dict(self.critic1.state_dict())
-        self.target_critic2.load_state_dict(self.critic2.state_dict())
+        # 4. Target Heads
+        self.target_critic1 = copy.deepcopy(self.critic1)
+        self.target_critic2 = copy.deepcopy(self.critic2)
+        for p in self.target_critic1.parameters(): p.requires_grad = False
+        for p in self.target_critic2.parameters(): p.requires_grad = False
 
     def get_action(self, obs, epsilon=1e-6):
         features = self.cnn(obs)
@@ -316,24 +322,33 @@ class SACNet(nn.Module):
         std = log_std.exp()
 
         dist = Normal(mu, std)
-        z = dist.rsample() # Reparameterization trick
+        z = dist.rsample() 
         action = torch.tanh(z)
 
-        # Correction for Tanh squashing
+        # Log prob correction for Tanh
         log_prob = dist.log_prob(z) - torch.log(1 - action.pow(2) + epsilon)
         return action, log_prob.sum(-1, keepdim=True), torch.tanh(mu)
 
     def get_q(self, obs, action):
+        # We use the LIVE cun for training
         features = self.cnn(obs)
         return self.critic1(features, action), self.critic2(features, action)
 
     def get_target_q(self, obs, action):
         with torch.no_grad():
-            features = self.cnn(obs)
-            return self.target_critic1(features, action), self.target_critic2(features, action)
+            # Use the STABLE target_cnn to avoid target-shifting
+            target_features = self.target_cnn(obs) 
+            return self.target_critic1(target_features, action), self.target_critic2(target_features, action)
 
     def soft_update_targets(self, tau):
+        # Update CNN Encoder
+        for param, target_param in zip(self.cnn.parameters(), self.target_cnn.parameters()):
+            target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
+        
+        # Update Critic 1
         for param, target_param in zip(self.critic1.parameters(), self.target_critic1.parameters()):
             target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)
+            
+        # Update Critic 2
         for param, target_param in zip(self.critic2.parameters(), self.target_critic2.parameters()):
             target_param.data.copy_(tau * param.data + (1.0 - tau) * target_param.data)

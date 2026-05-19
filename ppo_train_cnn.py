@@ -9,7 +9,7 @@ import numpy as np
 import time
 import os
 from models_cnn import ActorCriticNet
-from env_cnn import HarryPotterEnv
+from env_cnn_njit import HarryPotterEnv
 
 def compute_gae(rewards, values, dones, gamma=0.99, lam=0.95):
     """
@@ -35,6 +35,7 @@ def train_ppo(env, model, args, device, gamma=0.99, lam=0.95):
     actor_loss_hist = []
     critic_loss_hist = []
     entropy_loss_hist = []
+    kl_div_hist = []  # <--- New metric history
     winrates, winrate_epochs = [], []
     start_episode = 0
 
@@ -46,105 +47,79 @@ def train_ppo(env, model, args, device, gamma=0.99, lam=0.95):
         model.load_state_dict(checkpoint['model_state_dict'])
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         
-        # Load history if it exists
         rewards_hist = checkpoint.get('rewards', [])
         winrates = checkpoint.get('winrates', [])
         winrate_epochs = checkpoint.get('winrate_epochs', [])
         actor_loss_hist = checkpoint.get('actor_losses', [])
         critic_loss_hist = checkpoint.get('critic_losses', [])
         entropy_loss_hist = checkpoint.get('entropy_losses', [])
+        kl_div_hist = checkpoint.get('kl_divs', []) # <--- Load KL history
         start_episode = len(rewards_hist)
         
         print(f"Resuming from episode {start_episode}")
-    elif args.load_path:
-        print(f"Warning: Checkpoint file {args.load_path} not found. Starting from scratch.")
 
-    # Adjust loop to handle start_episode
     wins = 0
-    t0 = time.time()
     for ep in range(start_episode, start_episode + args.episodes):
         start_time = time.time()
         obs, _ = env.reset()
         states, actions, log_probs, values, rewards, dones = [], [], [], [], [], []
-        done = False
-        rollout_steps = args.rollout_steps   # or 1024 minimum
-        obs, _ = env.reset()
         
-        for step in range(rollout_steps):
+        # 1. Trajectory Collection
+        for step in range(args.rollout_steps):
             obs_tensor = torch.FloatTensor(obs).unsqueeze(0).to(device)
             action, log_prob, value = model.get_action(obs_tensor)
             
-            # Detach and move to CPU for the environment
             next_obs, reward, done, _, info = env.step(action.detach().cpu().squeeze().numpy())
             
             states.append(obs)
-            actions.append(action)
-            log_probs.append(log_prob)
-            values.append(value)
+            actions.append(action.detach())   # Detach to avoid RuntimeError
+            log_probs.append(log_prob.detach())
+            values.append(value.detach())
             rewards.append(reward)
             dones.append(done)
             obs = next_obs
             if done:
                 obs, _ = env.reset()
-            
-        # returns = []
-        # R = 0
-        # for r in reversed(rewards):
-        #     R = r + args.gamma * R
-        #     returns.insert(0, R)
-        # returns = torch.tensor(returns).to(device).float()
-        # if returns.std() > 1e-5:
-        #     returns = (returns - returns.mean()) / (returns.std() + 1e-8)
 
+        # 2. Preparation for Update
         with torch.no_grad():
-            action, log_prob, last_value = model.get_action(torch.FloatTensor(next_obs).unsqueeze(0).to(device))
+            _, _, last_value = model.get_action(torch.FloatTensor(next_obs).unsqueeze(0).to(device))
 
         values = torch.cat(values)
         values = torch.cat([values, last_value], dim=0).squeeze(-1)
         
-        rewards = torch.FloatTensor(np.array(rewards)).to(device).float()
-        old_states = torch.FloatTensor(np.array(states)).to(device).float()
-        old_actions = torch.cat(actions).to(device).float()
-        old_log_probs = torch.cat(log_probs).detach().to(device).float()
-        dones = torch.BoolTensor(np.array(dones)).detach().squeeze().to(device).float()
-        # advantages = (returns - old_values).detach() # Advantage shouldn't propagate gradients back to old values
+        rewards = torch.FloatTensor(np.array(rewards)).to(device)
+        old_states = torch.FloatTensor(np.array(states)).to(device)
+        old_actions = torch.cat(actions).to(device)
+        old_log_probs = torch.cat(log_probs).detach().to(device)
+        dones = torch.BoolTensor(np.array(dones)).to(device).float()
 
-        advantages, returns = compute_gae(
-            rewards,
-            values,
-            dones,
-            gamma,
-            lam
-        )
-        advantages = advantages.detach()
-        returns = returns.detach()
+        advantages, returns = compute_gae(rewards, values, dones, gamma, lam)
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
         
-        ep_actor_loss, ep_critic_loss, ep_entropy_loss = 0, 0, 0
+        ep_actor_loss, ep_critic_loss, ep_entropy_loss, ep_kl = 0, 0, 0, 0
         
+        # 3. PPO Update Loop
         for _ in range(args.k_epochs):
             mean, std, current_values = model(old_states)
             dist = Normal(mean, std)
             current_log_probs = dist.log_prob(old_actions).sum(dim=-1)
             
-            ratios = torch.exp(current_log_probs - old_log_probs)
-            surr1 = ratios * advantages
-            surr2 = torch.clamp(ratios, 1 - args.eps_clip, 1 + args.eps_clip) * advantages
+            # --- KL Divergence Calculation ---
+            log_ratio = current_log_probs - old_log_probs
+            ratio = torch.exp(log_ratio)
+            with torch.no_grad():
+                # Approx KL: http://joschu.net/blog/kl-approx.html
+                approx_kl = ((ratio - 1) - log_ratio).mean().item()
+            
+            surr1 = ratio * advantages
+            surr2 = torch.clamp(ratio, 1 - args.eps_clip, 1 + args.eps_clip) * advantages
             
             actor_loss = -torch.min(surr1, surr2).mean()
             critic_loss = nn.MSELoss()(current_values.squeeze(), returns)
             entropy_loss = dist.entropy().sum(dim=-1).mean()
             
-            c_critic = torch.tensor(0.5, dtype=torch.float32, device=device)
-            c_entropy = torch.tensor(0.01, dtype=torch.float32, device=device)
-            # Force each component to float32 and ensure they are on the right device
-            actor_loss = actor_loss.to(device=device, dtype=torch.float32)
-            critic_loss = critic_loss.to(device=device, dtype=torch.float32)
-            entropy_loss = entropy_loss.to(device=device, dtype=torch.float32)
-            
-            # print(f"Actor: {actor_loss.dtype}, Critic: {critic_loss.dtype}, Entropy: {entropy_loss.dtype}")
-            loss = actor_loss + c_critic * critic_loss - c_entropy * entropy_loss
-            # print(f"Loss: {loss.dtype}")
+            loss = actor_loss + 0.5 * critic_loss - 0.05 * entropy_loss
             
             optimizer.zero_grad()
             loss.backward()
@@ -154,29 +129,30 @@ def train_ppo(env, model, args, device, gamma=0.99, lam=0.95):
             ep_actor_loss += actor_loss.item()
             ep_critic_loss += critic_loss.item()
             ep_entropy_loss += entropy_loss.item()
+            ep_kl += approx_kl
             
-        ep_time = time.time() - start_time
-        ep_reward = sum(rewards)
-        
+        # 4. Logging & History
+        ep_reward = sum(rewards).item()
         rewards_hist.append(ep_reward)
         actor_loss_hist.append(ep_actor_loss / args.k_epochs)
         critic_loss_hist.append(ep_critic_loss / args.k_epochs)
         entropy_loss_hist.append(ep_entropy_loss / args.k_epochs)
+        kl_div_hist.append(ep_kl / args.k_epochs)
 
         if info.get('result') == "escaped": wins += 1
             
+        ep_time = time.time() - start_time
         if ep % args.log_interval == 0:
-            print(f"PPO | Ep: {ep} | Reward: {ep_reward:.2f} | Winrate {wins/args.log_interval:.2f} | Time: {ep_time:.3f}s | ",
-                  f"Critic loss {critic_loss.item():.2f} | Actor loss {actor_loss.item():.4f} | Entropy loss {entropy_loss.item():.2f}"
-            )
+            avg_kl = ep_kl / args.k_epochs
+            print(f"PPO | Ep: {ep} | Reward: {ep_reward:.2f} | Winrate: {wins/args.log_interval:.2f} | Time: {ep_time:.3f}s | "
+                  f"KL: {avg_kl:.5f} | Critic: {ep_critic_loss/args.k_epochs:.2f} | Ent: {ep_entropy_loss/args.k_epochs:.2f}")
             winrates.append(wins/args.log_interval)
             winrate_epochs.append(ep)
-            t0 = time.time()
             wins = 0
 
-        # Intermediate save every 100 episodes
-        if ep % 100 == 0 and ep > 0:
-            temp_checkpoint = {
+        # Periodic Save
+        if ep % 100 == 0:
+            checkpoint_data = {
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'rewards': rewards_hist,
@@ -185,24 +161,12 @@ def train_ppo(env, model, args, device, gamma=0.99, lam=0.95):
                 'actor_losses': actor_loss_hist,
                 'critic_losses': critic_loss_hist,
                 'entropy_losses': entropy_loss_hist,
+                'kl_divs': kl_div_hist, # <--- Persist KL history
                 'args': vars(args)
             }
-            torch.save(temp_checkpoint, args.save_path)
+            torch.save(checkpoint_data, args.save_path)
 
-    # Final Save
-    checkpoint = {
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-        'rewards': rewards_hist,
-        'winrates': winrates,
-        'winrate_epochs': winrate_epochs,
-        'actor_losses': actor_loss_hist,
-        'critic_losses': critic_loss_hist,
-        'entropy_losses': entropy_loss_hist,
-        'args': vars(args)
-    }
-    torch.save(checkpoint, args.save_path)
-    print(f"Final model and history saved to {args.save_path}")
+    print(f"Final model saved to {args.save_path}")
 
 if __name__ == '__main__':
     # Run with

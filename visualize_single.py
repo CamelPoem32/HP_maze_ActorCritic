@@ -121,10 +121,9 @@ def plot_sac_results(file_path, method_name):
         print(f"Error: File {file_path} not found.")
         return
 
-    # Load with map_location to ensure it works on CPU-only machines
     checkpoint = torch.load(file_path, map_location=torch.device('cpu'), weights_only=False)
     
-    # Extract keys based on your specific torch.save dictionary
+    # Core Metrics
     rewards = checkpoint.get('rewards', [])
     winrates = checkpoint.get('winrates', [])
     winrate_epochs = checkpoint.get('winrate_epochs', [])
@@ -132,89 +131,118 @@ def plot_sac_results(file_path, method_name):
     critic_losses = checkpoint.get('critic_losses', [])
     alpha_losses = checkpoint.get('alpha_losses', [])
     
-    # log_alpha is often a single tensor, we want to see its trend if it was a history
-    # If log_alpha is just the final state, we'll display it in the summary text.
+    # New Diagnostic Metrics
+    entropies = checkpoint.get('entropies', [])
+    q_means = checkpoint.get('q_means', [])
+    q_gaps = checkpoint.get('q_gaps', [])
+    std_means = checkpoint.get('std_means', [])
+    target_qs = checkpoint.get('target_qs', [])
     log_alpha = checkpoint.get('log_alpha', None)
 
-    fig, axs = plt.subplots(2, 3, figsize=(20, 12))
-    fig.suptitle(f'SAC Training Analysis: {method_name}', fontsize=20, fontweight='bold')
-
-    smooth_step = max(1, len(rewards) // 50)
+    fig, axs = plt.subplots(4, 3, figsize=(22, 12))
+    fig.suptitle(f'Detailed SAC Training Analysis: {method_name}', fontsize=24, fontweight='bold', y=0.98)
     
     # --- 1. Episode Rewards ---
+    smooth_step = max(1, len(rewards) // 100)
     ax = axs[0, 0]
-    ax.plot(rewards, color='royalblue', alpha=0.3, label='Raw')
-    if len(rewards) > smooth_step:
-        ax.plot(np.arange(smooth_step-1, len(rewards)), smooth_curve(rewards, smooth_step), color='blue', linewidth=2, label='Smoothed')
+    ax.plot(rewards, color='royalblue', alpha=0.3)
+    ax.plot(smooth_curve(rewards, smooth_step), color='blue', linewidth=2)
     ax.set_title('Total Episode Rewards')
-    ax.legend()
     ax.grid(True, alpha=0.3)
 
     # --- 2. Winrates ---
     ax = axs[0, 1]
+    smooth_step_winrates = max(1, len(winrates) // 100)
     x_axis = winrate_epochs if (winrate_epochs and len(winrate_epochs) == len(winrates)) else np.arange(len(winrates))
-    ax.plot(x_axis, np.array(winrates) * 100, marker='o', color='forestgreen', linewidth=2)
-    ax.set_title('Winrate (%) Over Training')
+    ax.plot(x_axis[smooth_step_winrates-1:], smooth_curve(np.array(winrates) * 100, smooth_step_winrates), marker='o', color='forestgreen', linewidth=2)
+    ax.set_title('Winrate (%)')
     ax.set_ylim(-5, 105)
-    ax.set_ylabel('Percentage')
     ax.grid(True, alpha=0.3)
 
-    # --- 3. Alpha Loss (Temperature Tuning) ---
+    # --- 3. Policy Entropy ---
     ax = axs[0, 2]
-    if len(alpha_losses) > 0:
-        ax.plot(alpha_losses, color='orange', alpha=0.4)
-        if len(alpha_losses) > smooth_step:
-            ax.plot(np.arange(smooth_step-1, len(alpha_losses)), smooth_curve(alpha_losses, smooth_step), color='darkorange', linewidth=2)
-        ax.set_title('Alpha Loss')
-    else:
-        ax.text(0.5, 0.5, 'No Alpha Loss Data', ha='center')
+    if len(entropies) > 0:
+        ax.plot(entropies, color='purple', alpha=0.3)
+        ax.plot(smooth_curve(entropies, smooth_step), color='darkviolet', linewidth=2)
+        ax.set_title('Policy Entropy (-log prob)')
     ax.grid(True, alpha=0.3)
 
     # --- 4. Actor Loss ---
     ax = axs[1, 0]
     if len(actor_losses) > 0:
-        # SAC Actor loss can be negative (it's -Q), so symlog is useful
-        processed_actor = symlog(np.array(actor_losses))
-        ax.plot(processed_actor, color='salmon', alpha=0.3)
-        if len(actor_losses) > smooth_step:
-            ax.plot(np.arange(smooth_step-1, len(actor_losses)), smooth_curve(processed_actor, smooth_step), color='red', linewidth=2)
-        ax.set_title('Actor Loss (Symlog)')
+        ax.plot(actor_losses, color='salmon', alpha=0.3)
+        ax.plot(smooth_curve(actor_losses, smooth_step), color='red', linewidth=2)
+        ax.set_title('Actor Loss (-Q)')
     ax.grid(True, alpha=0.3)
 
     # --- 5. Critic Loss ---
     ax = axs[1, 1]
     if len(critic_losses) > 0:
         ax.plot(critic_losses, color='darkgray', alpha=0.3)
-        if len(critic_losses) > smooth_step:
-            ax.plot(np.arange(smooth_step-1, len(critic_losses)), smooth_curve(critic_losses, smooth_step), color='black', linewidth=2)
+        ax.plot(smooth_curve(critic_losses, smooth_step), color='black', linewidth=2)
         ax.set_title('Critic Loss (MSE)')
         ax.set_yscale('log')
     ax.grid(True, alpha=0.3)
 
-    # --- 6. Stats Summary ---
+    # --- 6. Alpha Loss ---
     ax = axs[1, 2]
-    ax.axis('off')
+    if len(alpha_losses) > 0:
+        ax.plot(alpha_losses, color='orange', alpha=0.3)
+        ax.plot(smooth_curve(alpha_losses, smooth_step), color='darkorange', linewidth=2)
+        ax.set_title('Alpha Loss')
+    ax.grid(True, alpha=0.3)
+
+    # --- 7. Q-Value Comparison ---
+    ax = axs[2, 0]
+    if len(q_means) > 0 and len(target_qs) > 0:
+        ax.plot(smooth_curve(q_means, smooth_step), label='Pred Q', color='dodgerblue')
+        ax.plot(smooth_curve(target_qs, smooth_step), label='Target Q', color='tomato', linestyle='--')
+        ax.set_title('Q-Value Tracking (Mean)')
+        ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    # --- 8. Q-Gap (Overestimation Check) ---
+    ax = axs[2, 1]
+    if len(q_gaps) > 0:
+        ax.plot(q_gaps, color='teal', alpha=0.3)
+        ax.plot(smooth_curve(q_gaps, smooth_step), color='darkcyan', linewidth=2)
+        ax.set_title('Q1-Q2 Absolute Gap')
+    ax.grid(True, alpha=0.3)
+
+    # --- 9. Policy Std (Exploration) ---
+    ax = axs[2, 2]
+    if len(std_means) > 0:
+        ax.plot(std_means, color='gold', alpha=0.3)
+        ax.plot(smooth_curve(std_means, smooth_step), color='goldenrod', linewidth=2)
+        ax.set_title('Policy Std (Action Spread)')
+    ax.grid(True, alpha=0.3)
+
+    # --- 10. Summary Text ---
+    ax_txt = axs[3, 1]
+    ax_txt.axis('off')
     
-    # Calculate final stats
     avg_rew = np.mean(rewards[-50:]) if len(rewards) > 0 else 0
     final_wr = winrates[-1]*100 if len(winrates) > 0 else 0
     alpha_val = torch.exp(log_alpha).item() if isinstance(log_alpha, torch.Tensor) else "N/A"
     
     summary_text = (
-        f"--- SAC Summary ---\n\n"
+        f"--- SAC Diagnostic Summary ---\n\n"
         f"Episodes: {len(rewards)}\n"
-        f"Last 50 Avg Reward: {avg_rew:.2f}\n"
         f"Final Winrate: {final_wr:.1f}%\n"
-        f"Current Alpha: {alpha_val}\n"
-        f"Checkpoint: {os.path.basename(file_path)}"
+        f"Avg Reward (Last 50): {avg_rew:.2f}\n"
+        f"Current Alpha: {alpha_val:.6f}\n"
+        f"Final Policy Std: {std_means[-1] if std_means else 0.0}\n"
+        f"Final Q-Gap: {q_gaps[-1] if q_gaps else 0.0}"
     )
-    ax.text(0.1, 0.5, summary_text, fontsize=14, family='monospace', verticalalignment='center', 
-            bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.8))
+    ax_txt.text(0.5, 0.5, summary_text, fontsize=16, family='monospace', 
+                ha='center', va='center', bbox=dict(boxstyle='round', facecolor='azure', alpha=0.8))
+
+    # Hide unused subplots
+    axs[3, 0].axis('off')
+    axs[3, 2].axis('off')
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    save_name = f"sac_detailed.png"
-    plt.savefig(save_name, dpi=300)
-    print(f"Detailed SAC plot saved as: {save_name}")
+    plt.savefig(f"{method_name}_detailed.png", dpi=300)
     plt.show()
 
 if __name__ == '__main__':
